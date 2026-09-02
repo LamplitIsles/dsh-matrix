@@ -23,3 +23,15 @@ _Avoid_: Channel, chat
 **Mention-only mode**:
 The default response policy in which a room message triggers the companion only when it mentions or replies to the Matrix identity.
 _Avoid_: Silent mode
+
+**Room context buffer**:
+The bounded, in-memory sequence of eligible messages from the allowed room that have not yet been supplied to the active conversation. It is drained into one Matrix-triggered prompt when a reply trigger arrives, and is cleared on restart.
+_Avoid_: Queue
+
+**Reply trigger**:
+An allowed-room message that mentions the Matrix identity or is a verified reply to its message. A reply trigger drains the room context buffer, starts one companion turn, and receives that turn's Matrix reply.
+_Avoid_: Mention
+
+**Suppressed Matrix reply**:
+An otherwise completed Matrix-triggered turn whose final assistant text is the exact sentinel `NO_REPLY`; its text remains in the Companion conversation but is not sent to the allowed room.
+_Avoid_: No-op, skipped turn
