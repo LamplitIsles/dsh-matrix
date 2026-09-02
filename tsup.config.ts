@@ -30,6 +30,7 @@ const dshExternals = [
   "@deepseek-ai/dsh-llm",
   "@deepseek-ai/dsh-session",
   "@deepseek-ai/dsh-settings",
+  "@deepseek-ai/dsh-tools",
   "@deepseek-ai/dsh-workspace",
   "@deepseek-ai/schemastery",
   "react",

@@ -1,25 +1,30 @@
 import { createUserMessage, type AssistantMessage, type UserMessage } from "@deepseek-ai/dsh-llm";
 import { installModelSelection, type Agent, type AgentHandle, type ModelSelection } from "@deepseek-ai/dsh-agent";
 import type { Context } from "@deepseek-ai/cordis";
+import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 import {
   CREDENTIAL_REF,
   DEFAULT_SETTINGS,
   DEDUPE_LIMIT,
+  MAX_PROMPT_CHARS,
+  MAX_PROVENANCE_CHARS,
   RPC_CHANNEL,
   RPC_ENDPOINT,
   UNBOUND_NOTICE_INTERVAL_MS,
   type MatrixSettings
 } from "./constants.js";
 import {
-  admitMatrixEvent,
+  captureMatrixEvent,
   EventDeduper,
   matrixEventId,
   matrixTextMessage,
   type AdmittedMatrixMessage,
   type MatrixClientLike,
+  type MatrixContextRecord,
   type MatrixEventLike,
   type MatrixProvenance,
-  type MatrixTimelineData
+  type MatrixTimelineData,
+  renderMatrixContextPrompt
 } from "./matrix-protocol.js";
 import {
   selectMostRecentEligibleSession,
@@ -28,6 +33,7 @@ import {
   type WorkspaceLike
 } from "./session-selection.js";
 import { normalizeSettings, validateSettings } from "./settings.js";
+import { createMatrixToolDefinitions } from "./matrix-tools.js";
 
 export type BridgeReadinessState =
   | "disabled"
@@ -42,7 +48,7 @@ export interface BridgeReadiness {
   state: BridgeReadinessState;
   workspaceId?: string;
   sessionId?: string;
-  detail?: "workspace-not-found" | "invalid-settings" | "matrix-start-failed" | "session-inspection-failed" | "credential-unavailable";
+  detail?: "workspace-not-found" | "invalid-settings" | "matrix-start-failed" | "session-inspection-failed" | "credential-unavailable" | "tool-registration-failed";
 }
 
 export interface CredentialValue {
@@ -51,6 +57,8 @@ export interface CredentialValue {
 }
 
 export interface BridgeAgent extends Pick<Agent, "id" | "followup"> {
+  /** The live Agent context owns scoped native tool registrations. */
+  ctx?: Context & { tools?: { register: (definition: ToolDefinition) => () => void } };
   session?: {
     id?: string;
     events?: readonly SessionEventLike[];
@@ -98,6 +106,12 @@ interface PendingTurn {
   interrupted?: boolean | undefined;
   resolve: (text: string | undefined) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+interface QueuedTrigger {
+  message: AdmittedMatrixMessage;
+  /** Snapshot drained atomically when the trigger was classified. */
+  transcript: readonly MatrixContextRecord[];
 }
 
 interface AgentInboxClaimed {
@@ -217,7 +231,11 @@ export class MatrixBridge {
   private startPromise?: Promise<void>;
   private queueTail: Promise<void> = Promise.resolve();
   private queueGeneration = 0;
+  private classificationTail: Promise<void> = Promise.resolve();
   private lastUnboundNoticeAt = -Infinity;
+  private readonly contextBufferValue: MatrixContextRecord[] = [];
+  private contextCharacters = 0;
+  private toolDisposers: Array<() => void> = [];
   private readonly pendingTurns = new Map<string, PendingTurn>();
   private readonly pendingEventIds = new Set<string>();
   private readonly listeners: Array<() => void> = [];
@@ -269,6 +287,15 @@ export class MatrixBridge {
 
   get pendingCount(): number {
     return this.pendingTurns.size;
+  }
+
+  /** A detached snapshot of the unconsumed allowed-room context. */
+  get contextBuffer(): readonly MatrixContextRecord[] {
+    return this.contextBufferValue.map((record) => ({ ...record }));
+  }
+
+  get bufferedContextCharacters(): number {
+    return this.contextCharacters;
   }
 
   async start(): Promise<void> {
@@ -393,6 +420,17 @@ export class MatrixBridge {
     const live = this.deps.agents.get(selected.sessionId);
     if (live) {
       this.boundAgent = live;
+      try {
+        this.registerAgentTools(live);
+      } catch {
+        this.boundAgent = undefined;
+        this.boundSessionId = undefined;
+        if (!this.stopped) {
+          this.reportError();
+          this.setReadiness({ state: "failed", detail: "tool-registration-failed", workspaceId, sessionId: selected.sessionId });
+        }
+        return false;
+      }
       return true;
     }
     const recordedPreset = selected.inspection.meta.agentPreset;
@@ -419,6 +457,18 @@ export class MatrixBridge {
       }
       this.ownedHandle = handle;
       this.boundAgent = handle.agent;
+      try {
+        this.registerAgentTools(handle.agent);
+      } catch {
+        this.boundAgent = undefined;
+        this.ownedHandle = undefined;
+        try { await handle.dispose(); } catch { if (!this.stopped) this.reportError(); }
+        if (!this.stopped) {
+          this.reportError();
+          this.setReadiness({ state: "failed", detail: "tool-registration-failed", workspaceId, sessionId: selected.sessionId });
+        }
+        return false;
+      }
       return true;
     } catch {
       if (!this.stopped) this.reportError();
@@ -439,6 +489,39 @@ export class MatrixBridge {
       () => installModelSelection(context, { current: selection, assembled: undefined }),
       "dsh-matrix: recorded model selection"
     );
+  }
+
+  /** Register the fixed-room tools in the locked Agent's Cordis scope only. */
+  private registerAgentTools(agent: BridgeAgent | undefined): void {
+    if (!agent) return;
+    const registry = agent.ctx?.tools;
+    // Test-owned bridge fakes may not model the optional runtime context. A
+    // real DSH Agent always has this scoped registry through dsh-tools.
+    if (!registry || typeof registry.register !== "function") return;
+    this.disposeAgentTools();
+    const registered: Array<() => void> = [];
+    try {
+      for (const definition of createMatrixToolDefinitions({
+        getClient: () => this.client,
+        roomId: this.settings.roomId
+      })) {
+        const dispose = registry.register(definition);
+        if (typeof dispose !== "function") throw new Error("tool registration did not return a disposer");
+        registered.push(dispose);
+      }
+      this.toolDisposers = registered;
+    } catch (error) {
+      for (const dispose of registered.reverse()) {
+        try { dispose(); } catch { this.reportError(); }
+      }
+      throw error;
+    }
+  }
+
+  private disposeAgentTools(): void {
+    for (const dispose of this.toolDisposers.splice(0).reverse()) {
+      try { dispose(); } catch { this.reportError(); }
+    }
   }
 
   private setReadiness(next: BridgeReadiness): void {
@@ -498,38 +581,94 @@ export class MatrixBridge {
     const eventId = matrixEventId(event);
     if (!eventId || this.dedupe.has(eventId) || this.pendingEventIds.has(eventId)) return;
     this.pendingEventIds.add(eventId);
-    let admitted;
-    try {
-      admitted = await admitMatrixEvent(event, this.settings, this.client, toStartOfTimeline, data);
-    } finally {
-      this.pendingEventIds.delete(eventId);
-    }
-    if (!admitted) return;
-    this.dedupe.add(admitted.eventId);
-    this.enqueue(admitted);
+    // Reply-target verification may require an asynchronous homeserver fetch.
+    // Keep that classification in callback order so a slower first event can
+    // never be appended after a later timeline event.
+    const run = this.classificationTail
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await this.captureTimelineEvent(event, toStartOfTimeline, data);
+        } finally {
+          this.pendingEventIds.delete(eventId);
+        }
+      });
+    this.classificationTail = run.catch(() => {
+      this.reportError();
+    });
+    await run;
   }
 
-  private enqueue(message: AdmittedMatrixMessage): void {
+  private async captureTimelineEvent(event: MatrixEventLike, toStartOfTimeline: boolean, data?: MatrixTimelineData): Promise<void> {
+    if (!this.accepting || !this.prepared || this.stopped || !this.client) return;
+    let message: AdmittedMatrixMessage | undefined;
+    try {
+      message = await captureMatrixEvent(event, this.settings, this.client, toStartOfTimeline, data);
+    } catch {
+      this.reportError();
+      return;
+    }
+    if (!message || this.stopped || !this.client) return;
+    this.dedupe.add(message.eventId);
+    this.appendContext(message);
+    if (!message.trigger) return;
+    if (!this.boundAgent) {
+      await this.sendUnboundNotice(message);
+      return;
+    }
+    const transcript = this.drainContext();
+    this.enqueue({ message, transcript });
+  }
+
+  private enqueue(trigger: QueuedTrigger): void {
     const generation = this.queueGeneration;
     this.queueTail = this.queueTail
       .catch(() => undefined)
       .then(async () => {
         if (this.stopped || generation !== this.queueGeneration) return;
-        await this.processMessage(message);
+        await this.processMessage(trigger);
       })
       .catch(() => this.reportError());
   }
 
-  private async processMessage(message: AdmittedMatrixMessage): Promise<void> {
+  private appendContext(message: AdmittedMatrixMessage): void {
+    const record: MatrixContextRecord = {
+      eventId: message.eventId.slice(0, MAX_PROVENANCE_CHARS),
+      roomId: message.roomId.slice(0, MAX_PROVENANCE_CHARS),
+      sender: message.sender.slice(0, MAX_PROVENANCE_CHARS),
+      text: message.text
+    };
+    this.contextBufferValue.push(record);
+    this.contextCharacters += record.text.length;
+    while (this.contextCharacters > MAX_PROMPT_CHARS && this.contextBufferValue.length > 0) {
+      const oldest = this.contextBufferValue.shift();
+      if (!oldest) break;
+      this.contextCharacters -= oldest.text.length;
+    }
+  }
+
+  private drainContext(): readonly MatrixContextRecord[] {
+    const drained = this.contextBufferValue.map((record) => ({ ...record }));
+    this.contextBufferValue.length = 0;
+    this.contextCharacters = 0;
+    return drained;
+  }
+
+  private async processMessage(trigger: QueuedTrigger): Promise<void> {
+    const { message, transcript } = trigger;
     if (this.stopped || !this.client) return;
     if (!this.boundAgent) {
-      await this.sendUnboundNotice(message.roomId);
+      await this.sendUnboundNotice(message);
       return;
     }
-    const source = message.source as unknown as UserMessage["source"];
+    const source: MatrixProvenance = {
+      ...message.source,
+      triggerEventId: message.eventId.slice(0, MAX_PROVENANCE_CHARS),
+      context: transcript.map((record) => ({ ...record }))
+    };
     const userMessage = createUserMessage({
-      content: [{ type: "text", text: message.text }],
-      source
+      content: [{ type: "text", text: renderMatrixContextPrompt(transcript, message.eventId.slice(0, MAX_PROVENANCE_CHARS)) }],
+      source: source as unknown as UserMessage["source"]
     });
     const wait = this.waitForTurn(String(userMessage.id), message.eventId);
     try {
@@ -568,8 +707,8 @@ export class MatrixBridge {
       }
     }
     const text = await wait;
-    if (!text || this.stopped || !this.client) return;
-    await this.sendMessage(message.roomId, text);
+    if (!text || text.trim() === "NO_REPLY" || this.stopped || !this.client) return;
+    await this.sendMessage(message.roomId, text, message.eventId);
   }
 
   private waitForTurn(messageId: string, matrixEventIdValue: string): Promise<string | undefined> {
@@ -624,22 +763,22 @@ export class MatrixBridge {
     }
   }
 
-  private async sendMessage(roomId: string, body: string): Promise<void> {
+  private async sendMessage(roomId: string, body: string, replyToEventId?: string): Promise<void> {
     if (!this.client || this.stopped) return;
     if (this.client.sendMessage) {
-      await this.client.sendMessage(roomId, matrixTextMessage(roomId, body));
+      await this.client.sendMessage(roomId, matrixTextMessage(roomId, body, replyToEventId));
       return;
     }
     if (this.client.sendEvent) {
-      await this.client.sendEvent(roomId, "m.room.message", matrixTextMessage(roomId, body));
+      await this.client.sendEvent(roomId, "m.room.message", matrixTextMessage(roomId, body, replyToEventId));
     }
   }
 
-  private async sendUnboundNotice(roomId: string): Promise<void> {
+  private async sendUnboundNotice(message: AdmittedMatrixMessage): Promise<void> {
     const now = this.now();
     if (now - this.lastUnboundNoticeAt < this.unboundNoticeIntervalMs) return;
     this.lastUnboundNoticeAt = now;
-    await this.sendMessage(roomId, "No Companion conversation is available in the configured workspace. Start a Companion conversation there, then restart DSH.");
+    await this.sendMessage(message.roomId, "No Companion conversation is available in the configured workspace. Start a Companion conversation there, then restart DSH.", message.eventId);
   }
 
   /** Stop intake first, then settle queued work and dispose only resumed ownership. */
@@ -654,6 +793,7 @@ export class MatrixBridge {
     }
     const client = this.client;
     this.client = undefined;
+    this.disposeAgentTools();
     try { await client?.stopClient?.(); } catch { this.reportError(); }
     await this.queueTail.catch(() => undefined);
     if (this.ownedHandle) {
@@ -664,6 +804,8 @@ export class MatrixBridge {
     this.boundAgent = undefined;
     this.dedupe.clear();
     this.pendingEventIds.clear();
+    this.contextBufferValue.length = 0;
+    this.contextCharacters = 0;
     this.setReadiness({ state: "disabled" });
   }
 }

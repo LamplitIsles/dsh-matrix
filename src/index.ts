@@ -12,6 +12,7 @@ export const inject = [
   "settings",
   "agents",
   "agentPresets",
+  "tools",
   "workspaceRegistry",
   "sessionController"
 ] as const;
@@ -105,6 +106,7 @@ export type {
 } from "./bridge.js";
 export {
   admitMatrixEvent,
+  captureMatrixEvent,
   cleanMatrixPrompt,
   EventDeduper,
   matrixEventContent,
@@ -112,16 +114,29 @@ export {
   matrixEventRoomId,
   matrixEventSender,
   matrixEventType,
-  matrixTextMessage
+  matrixTextMessage,
+  renderMatrixContextPrompt
 } from "./matrix-protocol.js";
 export type {
   AdmittedMatrixMessage,
   MatrixClientLike,
+  MatrixContextRecord,
   MatrixEventLike,
   MatrixProvenance,
   MatrixRoomLike,
   MatrixTimelineData
 } from "./matrix-protocol.js";
+export {
+  createMatrixToolDefinitions,
+  listJoinedMatrixUserIds,
+  MATRIX_LIST_ROOM_MEMBERS,
+  MATRIX_SEND_ROOM_MESSAGE
+} from "./matrix-tools.js";
+export type {
+  MatrixListRoomMembersResult,
+  MatrixSendRoomMessageResult,
+  MatrixToolDependencies
+} from "./matrix-tools.js";
 export {
   lastHumanPromptAt,
   selectMostRecentEligibleSession,
@@ -138,7 +153,10 @@ export {
   CREDENTIAL_REF,
   RPC_CHANNEL,
   RPC_ENDPOINT,
-  SETTINGS_NAMESPACE
+  SETTINGS_NAMESPACE,
+  MAX_MATRIX_TOOL_BODY_CHARS,
+  MAX_ROOM_MEMBER_ID_CHARS,
+  MAX_ROOM_MEMBERS
 } from "./constants.js";
 export { DEFAULT_SETTINGS } from "./constants.js";
 export { MatrixSettingsSchema } from "./settings.js";

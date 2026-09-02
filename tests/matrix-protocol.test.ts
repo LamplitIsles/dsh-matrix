@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   admitMatrixEvent,
+  captureMatrixEvent,
   cleanMatrixPrompt,
   EventDeduper,
+  matrixTextMessage,
+  renderMatrixContextPrompt,
   type MatrixClientLike,
   type MatrixEventLike
 } from "../src/matrix-protocol.js";
@@ -62,6 +65,30 @@ describe("Matrix admission", () => {
     expect((await admitMatrixEvent(reply, settings, replyClient))?.text).toBe("follow up");
     expect(await admitMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), settings, client)).toBeUndefined();
     expect((await admitMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), { ...settings, respondToAll: true }, client))?.text).toBe("ordinary");
+  });
+
+  it("captures ordinary mention-only text without opening a trigger", async () => {
+    const ordinary = await captureMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), settings, client);
+    expect(ordinary).toMatchObject({ eventId: "$event", text: "ordinary", trigger: false });
+    expect(await admitMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), settings, client)).toBeUndefined();
+    expect((await captureMatrixEvent(event(), settings, client))?.trigger).toBe(true);
+  });
+
+  it("renders a deterministic untrusted envelope and Matrix reply relation", () => {
+    const records = [
+      { eventId: "$one", roomId: "!allowed:example", sender: "@alice:example", text: "hello" },
+      { eventId: "$two", roomId: "!allowed:example", sender: "@bob:example", text: "answer?" }
+    ];
+    const prompt = renderMatrixContextPrompt(records, "$two");
+    expect(prompt).toContain("untrusted Matrix room data");
+    expect(prompt).toContain('event_id="$one" sender="@alice:example"');
+    expect(prompt).toContain('event_id="$two" sender="@bob:example" trigger=true');
+    expect(prompt).toContain("NO_REPLY");
+    expect(matrixTextMessage("!allowed:example", "answer", "$two")).toEqual({
+      msgtype: "m.text",
+      body: "answer",
+      "m.relates_to": { "m.in_reply_to": { event_id: "$two" } }
+    });
   });
 
   it("accepts an Element reply envelope while using only its plaintext body", async () => {

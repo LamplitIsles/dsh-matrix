@@ -75,12 +75,49 @@ Element reply envelopes may include `format`/`formatted_body`; the bridge
 verifies the referenced event author and uses only the plaintext `body`.
 Formatted HTML is never rendered or treated as prompt content.
 
-Admitted prompts are serialized because they share one locked Agent. Matrix
-room, sender, and event identity remain bounded plugin provenance on the DSH
-message; event fields are data, not instructions. The bridge waits for the
-exact Matrix-initiated turn and sends only its final non-empty assistant text as
-one ordinary `m.text` message. Tool output, intermediate assistant messages,
-and activity initiated by Web or CLI are not relayed.
+Every eligible external text message is captured in timeline order in a
+bounded, in-memory room context buffer. In mention-only mode an ordinary
+message adds context but does not open a turn. A mention or a verified reply to
+the Matrix identity drains the FIFO buffer atomically (the triggering message
+included) into one Matrix-initiated turn; **Respond to all messages** makes each
+eligible message a trigger. Messages that arrive while a turn is pending stay
+in the next buffer and cannot be folded into the already-running prompt.
+
+The resulting user message contains a deterministic plugin-authored envelope.
+It labels every record with the sender's stable Matrix user ID and event ID,
+identifies the reply-triggering event, and warns that room records are
+untrusted data rather than instructions. The same bounded room/sender/event
+records ride in plugin provenance for Host-side attribution; provider
+serialization is not relied on to expose that metadata to the model. Buffered
+room text is part of the durable DSH conversation history and model input, so
+the selected allowed room is a deliberate privacy boundary.
+
+Admitted prompts are serialized because they share one locked Agent. The bridge
+waits for the exact Matrix-initiated turn and sends only its final non-empty
+assistant text as one `m.text` reply related to the triggering event. Tool
+output, intermediate assistant messages, and activity initiated by Web or CLI
+are not relayed. If the final text, after trimming, is exactly `NO_REPLY`, it is
+retained in DSH but no Matrix message is sent.
+
+The locked Companion also receives exactly two native tools in its scoped
+conversation:
+
+- **`matrix_list_room_members`** takes no arguments and returns a bounded (at
+  most 128 IDs and 16,000 rendered characters), sorted list of current joined
+  Matrix user IDs for the configured room only.
+  It intentionally omits display names, avatars, presence, power levels,
+  membership history, and every other room.
+- **`matrix_send_room_message`** takes one non-empty plain-text `body` of at
+  most 16,000 characters and sends one ordinary `m.text` event to the
+  configured room. It has no room argument and cannot impersonate, reply, or
+  create a thread. The normal DSH tool approval and cancellation pipeline
+  still applies, and unavailable Matrix connections produce bounded errors.
+
+These registrations belong only to the startup-locked Companion and are
+removed when the bridge stops or ownership is released. A Web/CLI-initiated
+turn may use the send tool to greet the room; that turn's final Assistant text
+stays in DSH because it has no Matrix pending-turn attribution, and the
+bot-authored event is ignored by the bridge so it cannot retrigger a turn.
 
 If no eligible conversation existed when DSH started, the Matrix client stays
 connected but the bridge remains **unbound** until the next restart. A
@@ -102,7 +139,10 @@ ignored), threads, reactions, moderation,
 invites/auto-join, streaming output or `m.replace` edits, multiple rooms or
 accounts, per-room/session selection, live switching, automatic session
 creation, password/SSO login, durable sync tokens, durable deduplication,
-transactional outbox, or exactly-once delivery guarantees.
+transactional outbox, or exactly-once delivery guarantees. The fixed-room
+tools do not provide room selection, display-name/profile lookup, presence,
+power levels, membership history, invitations, moderation, media/HTML,
+threads, reactions, or any other Matrix account capability.
 
 ## Operator verification
 
@@ -111,11 +151,21 @@ transactional outbox, or exactly-once delivery guarantees.
    and account values, write the Element token, and save.
 3. Restart DSH again and confirm the card reports **bound** (or the expected
    bounded missing/unbound state).
-4. In the allowed room, send a mention or reply and confirm exactly one final
-   text answer. Send a notice, an edit, a thread event, and a message in another
-   room; confirm none produces a reply.
-5. Toggle **Respond to all**, save, restart, and verify an ordinary text message
-   triggers. Stop/reload DSH and confirm the Matrix client stops before a new
+4. In the allowed room, send two ordinary messages followed by a mention or
+   reply. Confirm the answer cites the bounded context and is a Matrix reply to
+   the triggering event. Send a notice, an edit, a thread event, and a message
+   in another room; confirm none enters context or produces a reply.
+5. Ask the companion to answer exactly `NO_REPLY` and confirm that the turn is
+   visible in DSH but no room message is sent. Toggle **Respond to all**, save,
+   restart, and verify an ordinary text message triggers.
+6. Ask the locked Companion to call `matrix_list_room_members`; verify that it
+   sees only bounded joined user IDs from the configured room. Ask it to call
+   `matrix_send_room_message` with a short greeting and confirm the single
+   plain-text room message, DSH approval prompt, and absence of a second bridge
+   turn. Try an empty/overlong body and an unavailable connection to confirm
+   bounded errors.
+7. Stop/reload DSH and confirm the Matrix client, listeners, queued work,
+   scoped tool registrations, and any plugin-resumed Agent stop before a new
    instance starts.
 
 For an isolated release check, run `npm run typecheck`, `npm test`, `npm run

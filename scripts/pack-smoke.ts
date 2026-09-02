@@ -191,11 +191,12 @@ async function main(): Promise<void> {
     if (metadata.dsh?.bundle?.patch !== "./cordis.patch.yml" || metadata.dsh.client?.platform !== "web") throw new Error("installed DSH manifest mismatch");
     if (!metadata.dsh.client.inject?.includes("@deepseek-ai/dsh-client-ui-workspace")) throw new Error("workspace client injection missing");
     if (metadata.peerDependencies?.["@deepseek-ai/cordis"] !== "4.0.2") throw new Error("Cordis peer is not pinned to 4.0.2");
+    if (metadata.peerDependencies?.["@deepseek-ai/dsh-tools"] !== "0.1.2-alpha.3") throw new Error("dsh-tools peer is not pinned to 0.1.2-alpha.3");
     for (const [name, version] of Object.entries(metadata.peerDependencies ?? {})) {
       if (name.startsWith("@deepseek-ai/dsh-") && version !== "0.1.2-alpha.3") throw new Error(`non-alpha DSH peer: ${name}@${version}`);
     }
     const patchText = await readFile(join(installed, "cordis.patch.yml"), "utf8");
-    for (const required of ["dsh-matrix", "@lamplitisles/dsh-matrix", "connection", "credentials", "settings", "agents", "workspaceRegistry", "sessionController"]) {
+    for (const required of ["dsh-matrix", "@lamplitisles/dsh-matrix", "connection", "credentials", "settings", "agents", "agentPresets", "tools", "workspaceRegistry", "sessionController"]) {
       if (!patchText.includes(required)) throw new Error(`Cordis patch is missing ${required}`);
     }
 

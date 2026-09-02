@@ -1,0 +1,93 @@
+import { describe, expect, it } from "vitest";
+import {
+  createMatrixToolDefinitions,
+  listJoinedMatrixUserIds,
+  MATRIX_LIST_ROOM_MEMBERS,
+  MATRIX_SEND_ROOM_MESSAGE
+} from "../src/matrix-tools.js";
+import { MAX_MATRIX_TOOL_BODY_CHARS, MAX_ROOM_MEMBERS } from "../src/constants.js";
+import type { MatrixClientLike } from "../src/matrix-protocol.js";
+
+function execution(signal = new AbortController().signal): any {
+  return { signal };
+}
+
+function definitions(client: MatrixClientLike, roomId = "!allowed:example") {
+  return createMatrixToolDefinitions({ getClient: () => client, roomId });
+}
+
+describe("fixed-room Matrix tools", () => {
+  it("lists only a bounded, deterministic current joined-user-ID roster", async () => {
+    const members = Array.from({ length: MAX_ROOM_MEMBERS + 20 }, (_, index) => ({
+      userId: `@member-${String(MAX_ROOM_MEMBERS + 20 - index).padStart(3, "0")}:example`,
+      name: "Private display name",
+      presence: "online",
+      powerLevel: 100,
+      membership: "join"
+    }));
+    let requestedRoom = "";
+    const client: MatrixClientLike = {
+      getRoom: (roomId) => {
+        requestedRoom = roomId;
+        return { getJoinedMembers: () => members };
+      }
+    };
+    const result = await definitions(client)[0]!.execute({}, execution()) as { userIds: string[] };
+    expect(requestedRoom).toBe("!allowed:example");
+    expect(result.userIds).toHaveLength(MAX_ROOM_MEMBERS);
+    expect(result.userIds[0]).toBe("@member-001:example");
+    expect(result.userIds.every((id: string) => id.startsWith("@member-") && !id.includes("Private"))).toBe(true);
+    expect(result).not.toHaveProperty("displayNames");
+  });
+
+  it("uses joined membership from the current-room fallback and never another room", () => {
+    const client: MatrixClientLike = {
+      getRoom: () => ({
+        getMembers: () => [
+          { userId: "@joined:example", membership: "join" },
+          { userId: "@left:example", membership: "leave" }
+        ]
+      })
+    };
+    expect(listJoinedMatrixUserIds(client, "!fixed:example")).toEqual(["@joined:example"]);
+  });
+
+  it("sends one ordinary fixed-room m.text event with no relation", async () => {
+    const sent: Array<{ roomId: string; content: Record<string, unknown> }> = [];
+    const client: MatrixClientLike = {
+      sendMessage: async (roomId, content) => { sent.push({ roomId, content }); }
+    };
+    const tool = definitions(client, "!fixed:example").find((candidate) => candidate.name === MATRIX_SEND_ROOM_MESSAGE)!;
+    const result = await tool.execute({ body: "hello group", roomId: "!attacker:example" } as any, execution());
+    expect(result).toEqual({ sent: true });
+    expect(sent).toEqual([{ roomId: "!fixed:example", content: { msgtype: "m.text", body: "hello group" } }]);
+  });
+
+  it("rejects invalid bodies, unavailable connections, and cancellation with bounded errors", async () => {
+    const tool = definitions({ sendMessage: async () => undefined })[1]!;
+    await expect(tool.execute({ body: "   " }, execution())).rejects.toThrow("non-empty");
+    await expect(tool.execute({ body: "x".repeat(MAX_MATRIX_TOOL_BODY_CHARS + 1) }, execution())).rejects.toThrow("at most");
+
+    const unavailable = definitions(undefined as unknown as MatrixClientLike)[1]!;
+    await expect(unavailable.execute({ body: "hello" }, execution())).rejects.toThrow("unavailable");
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(tool.execute({ body: "hello" }, execution(controller.signal))).rejects.toThrow("cancelled");
+    const broken = definitions({ getRoom: () => { throw new Error("secret token from Matrix"); } } as MatrixClientLike)[0]!;
+    await expect(broken.execute({}, execution())).rejects.toThrow("unavailable");
+    await expect(broken.execute({}, execution())).rejects.not.toThrow("secret token");
+  });
+
+  it("exposes exactly the two native names and no room parameter", () => {
+    const tools = definitions({});
+    expect(tools.map((tool) => tool.name)).toEqual([MATRIX_LIST_ROOM_MEMBERS, MATRIX_SEND_ROOM_MESSAGE]);
+    expect(tools[0]!.parameters).toMatchObject({ type: "object", properties: {} });
+    expect(tools[1]!.parameters).toMatchObject({
+      type: "object",
+      properties: { body: { type: "string" } },
+      required: ["body"]
+    });
+    expect(tools[1]!.parameters).not.toHaveProperty("roomId");
+  });
+});
