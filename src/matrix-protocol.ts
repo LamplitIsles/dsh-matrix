@@ -415,11 +415,18 @@ export async function captureMatrixEvent(
   };
 }
 
-export function matrixTextMessage(roomId: string, body: string, replyToEventId?: string): Record<string, unknown> {
+/** Build one ordinary Matrix text payload, optionally carrying intentional user mentions. */
+export function matrixTextMessage(
+  roomId: string,
+  body: string,
+  replyToEventId?: string,
+  mentionUserIds?: readonly string[]
+): Record<string, unknown> {
   void roomId;
   return {
     msgtype: "m.text",
     body,
-    ...(replyToEventId ? { "m.relates_to": { "m.in_reply_to": { event_id: replyToEventId } } } : {})
+    ...(replyToEventId ? { "m.relates_to": { "m.in_reply_to": { event_id: replyToEventId } } } : {}),
+    ...(mentionUserIds && mentionUserIds.length > 0 ? { "m.mentions": { user_ids: [...mentionUserIds] } } : {})
   };
 }

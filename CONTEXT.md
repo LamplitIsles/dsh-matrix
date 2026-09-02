@@ -57,7 +57,7 @@ The bounded sorted `{ userId, displayName }` entries returned by `matrix_list_ro
 _Avoid_: Member history
 
 **Fixed-room Matrix send**:
-The bounded plain-text operation performed by `matrix_send_room_message`, which emits one ordinary `m.text` event to the allowed room through DSH's existing approval and cancellation pipeline. It cannot impersonate, reply, thread, or choose another room.
+The bounded plain-text operation performed by `matrix_send_room_message`, which emits one ordinary `m.text` event to the allowed room through DSH's existing approval and cancellation pipeline. Its optional `mentions` values are exact, case-sensitive current display labels from the bounded joined-user roster; the bridge resolves them locally to stable Matrix IDs and emits `m.mentions.user_ids` without changing the caller's visible body. Omitted and empty mentions have the same no-mention behavior. Unknown, stale, duplicate-label, direct-ID, and `@room` inputs fail before send with a bounded JSON correction list of valid display labels. It cannot impersonate, reply, thread, or choose another room.
 _Avoid_: Matrix reply tool, arbitrary room send
 
 **DSH-only proactive turn**:

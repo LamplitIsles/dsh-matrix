@@ -134,6 +134,11 @@ describe("Matrix admission", () => {
       body: "answer",
       "m.relates_to": { "m.in_reply_to": { event_id: "$two" } }
     });
+    expect(matrixTextMessage("!allowed:example", "notify", undefined, ["@alice:example", "@bob:example"])).toEqual({
+      msgtype: "m.text",
+      body: "notify",
+      "m.mentions": { user_ids: ["@alice:example", "@bob:example"] }
+    });
   });
 
   it("keeps hostile display labels bounded and safe in speaker attribution", () => {

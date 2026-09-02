@@ -98,6 +98,89 @@ describe("fixed-room Matrix tools", () => {
     expect(sent).toEqual([{ roomId: "!fixed:example", content: { msgtype: "m.text", body: "hello group" } }]);
   });
 
+  it("resolves exact current display labels to intentional Matrix mentions", async () => {
+    const sent: Array<{ roomId: string; content: Record<string, unknown> }> = [];
+    const client: MatrixClientLike = {
+      getRoom: () => ({
+        getJoinedMembers: () => [
+          { userId: "@alice:example", name: "Alice", membership: "join" },
+          { userId: "@bob:example", name: "Bob", membership: "join" }
+        ]
+      }),
+      sendMessage: async (roomId, content) => { sent.push({ roomId, content }); }
+    };
+    const tool = definitions(client, "!fixed:example").find((candidate) => candidate.name === MATRIX_SEND_ROOM_MESSAGE)!;
+    await tool.execute({ body: "hello @people", mentions: ["Alice", "Alice", "Bob"] }, execution());
+    expect(sent).toEqual([{
+      roomId: "!fixed:example",
+      content: {
+        msgtype: "m.text",
+        body: "hello @people",
+        "m.mentions": { user_ids: ["@alice:example", "@bob:example"] }
+      }
+    }]);
+  });
+
+  it("treats omitted and empty mentions as the existing no-mention payload", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const client: MatrixClientLike = {
+      getRoom: () => ({ getJoinedMembers: () => [{ userId: "@alice:example", name: "Alice", membership: "join" }] }),
+      sendMessage: async (_roomId, content) => { sent.push(content); }
+    };
+    const tool = definitions(client)[1]!;
+    await tool.execute({ body: "without mentions" }, execution());
+    await tool.execute({ body: "empty mentions", mentions: [] }, execution());
+    expect(sent).toEqual([
+      { msgtype: "m.text", body: "without mentions" },
+      { msgtype: "m.text", body: "empty mentions" }
+    ]);
+  });
+
+  it("rejects stale, direct-ID, ambiguous, and special labels before sending", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const client: MatrixClientLike = {
+      getRoom: () => ({
+        getJoinedMembers: () => [
+          { userId: "@alice:example", name: "Alice", membership: "join" },
+          { userId: "@bob:example", name: "Bob", membership: "join" },
+          { userId: "@one:example", name: "Same", membership: "join" },
+          { userId: "@two:example", name: "Same", membership: "join" }
+        ]
+      }),
+      sendMessage: async (_roomId, content) => { sent.push(content); }
+    };
+    const tool = definitions(client)[1]!;
+    for (const label of ["Missing", "alice", " @alice:example", "@alice:example", "@room", "Same"]) {
+      await expect(tool.execute({ body: "must not send", mentions: [label] }, execution()))
+        .rejects.toThrow(new RegExp(label.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")));
+    }
+    await expect(tool.execute({ body: "must not send", mentions: ["Missing"] }, execution()))
+      .rejects.toThrow(/\["Alice","Bob","Same"\]/);
+    await expect(tool.execute({ body: "must not send", mentions: ["Missing"] }, execution()))
+      .rejects.not.toThrow("@alice:example");
+    expect(sent).toHaveLength(0);
+  });
+
+  it("fails closed when the local roster changes after label resolution", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    let reads = 0;
+    const client: MatrixClientLike = {
+      getRoom: () => ({
+        getJoinedMembers: () => {
+          reads += 1;
+          return reads === 1
+            ? [{ userId: "@alice:example", name: "Alice", membership: "join" }]
+            : [{ userId: "@alice:example", name: "Renamed", membership: "join" }];
+        }
+      }),
+      sendMessage: async (_roomId, content) => { sent.push(content); }
+    };
+    const tool = definitions(client)[1]!;
+    await expect(tool.execute({ body: "stale", mentions: ["Alice"] }, execution()))
+      .rejects.toThrow(/\["Renamed"\]/);
+    expect(sent).toHaveLength(0);
+  });
+
   it("rejects invalid bodies, unavailable connections, and cancellation with bounded errors", async () => {
     const tool = definitions({ sendMessage: async () => undefined })[1]!;
     await expect(tool.execute({ body: "   " }, execution())).rejects.toThrow("non-empty");
@@ -120,7 +203,7 @@ describe("fixed-room Matrix tools", () => {
     expect(tools[0]!.parameters).toMatchObject({ type: "object", properties: {} });
     expect(tools[1]!.parameters).toMatchObject({
       type: "object",
-      properties: { body: { type: "string" } },
+      properties: { body: { type: "string" }, mentions: { type: "array", items: { type: "string" } } },
       required: ["body"]
     });
     expect(tools[1]!.parameters).not.toHaveProperty("roomId");

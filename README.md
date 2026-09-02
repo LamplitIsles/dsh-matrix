@@ -114,12 +114,23 @@ conversation:
   It intentionally omits avatars, presence, power levels, membership history,
   and every other room.
 - **`matrix_send_room_message`** takes one non-empty plain-text `body` of at
-  most 16,000 characters and sends one ordinary `m.text` event to the
-  configured room. It has no room argument and cannot impersonate, reply, or
-  create a thread. The normal DSH tool approval and cancellation pipeline
-  still applies. Tools return a bounded not-ready error before initial sync is
-  **PREPARED** and after a sync **ERROR**; other unavailable Matrix connections
-  produce the same bounded failure boundary.
+  most 16,000 characters and an optional `mentions` array. Each mention must
+  exactly equal one unique current display label in the bounded roster returned
+  by `matrix_list_room_members`; labels are case-sensitive and are not
+  trimmed, normalized, guessed, or looked up remotely. The tool resolves those
+  labels locally to Matrix user IDs and emits one ordinary `m.text` event with
+  `m.mentions: { user_ids: [...] }`. Repeated labels are harmless and produce
+  one ID; omitting `mentions` and passing `[]` are identical no-mention calls.
+  The caller's body is sent unchanged: the tool does not add visible `@label`
+  text, accept Matrix IDs or `@room`, impersonate, reply, or create a thread.
+  If a label is stale, unknown, or ambiguous (including after a local roster
+  change detected before send), the whole call is rejected before any event is
+  sent. The bounded error includes the requested label and a JSON list of
+  current valid display labels, never roster IDs or raw Matrix errors. The
+  normal DSH tool approval and cancellation pipeline still applies. Tools
+  return a bounded not-ready error before initial sync is **PREPARED** and after
+  a sync **ERROR**; other unavailable Matrix connections produce the same
+  bounded failure boundary.
 
 These registrations belong only to the startup-locked Companion and are
 removed when the bridge stops or ownership is released. A Web/CLI-initiated
@@ -167,11 +178,14 @@ threads, reactions, or any other Matrix account capability.
    visible in DSH but no room message is sent. Toggle **Respond to all**, save,
    restart, and verify an ordinary text message triggers.
 6. Ask the locked Companion to call `matrix_list_room_members`; verify only
-   bounded `{ userId, displayName }` entries from the configured room. Ask it to call
-   `matrix_send_room_message` with a short greeting and confirm the single
+   bounded `{ userId, displayName }` entries from the configured room. Ask it to
+   call `matrix_send_room_message` with a short greeting and confirm the single
    plain-text room message, DSH approval prompt, and absence of a second bridge
-   turn. Try an empty/overlong body and an unavailable connection to confirm
-   bounded errors.
+   turn. Then pass one or more exact roster display labels in `mentions` and
+   verify the visible body is unchanged while Matrix receives
+   `m.mentions.user_ids`. Try omitted/empty mentions, a stale or ambiguous
+   label, an empty/overlong body, and an unavailable connection; invalid labels
+   must send nothing and return only the bounded JSON correction list.
 7. Stop/reload DSH and confirm the Matrix client, listeners, queued work,
    scoped tool registrations, and any plugin-resumed Agent stop before a new
    instance starts.
