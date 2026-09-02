@@ -69,7 +69,7 @@ export function apply(ctx: ClientContext): void {
 }
 
 export { MatrixSettingsCard, decodeSettings, describeCredential, saveCredential } from "./client/settings-card.js";
-export { matrixLabels, matrixLocale } from "./client/labels.js";
+export { matrixLabels, matrixLocale, matrixZhLabels } from "./client/labels.js";
 export type { ClientSettingsScope, CredentialApi, CredentialStatus, MatrixSettingsCardProps, ReadinessApi, WorkspaceChoice, WorkspaceSource } from "./client/settings-card.js";
 export type { MatrixLocaleKey } from "./client/labels.js";
 export { CREDENTIAL_REF, RPC_CHANNEL, RPC_ENDPOINT, SETTINGS_NAMESPACE } from "./constants.js";

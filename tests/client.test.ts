@@ -2,7 +2,7 @@ import type { Context as ClientContext } from "@deepseek-ai/cordis";
 import { describe, expect, it, vi } from "vitest";
 import { apply, inject } from "../src/client.js";
 import { SETTINGS_NAMESPACE } from "../src/constants.js";
-import { matrixLabels } from "../src/client/labels.js";
+import { matrixLabels, matrixZhLabels } from "../src/client/labels.js";
 import { MatrixSettingsCard, type WorkspaceSource } from "../src/client/settings-card.js";
 
 describe("client settings registration", () => {
@@ -37,7 +37,7 @@ describe("client settings registration", () => {
 
     apply(context);
 
-    expect(localeRegister).toHaveBeenCalledWith(SETTINGS_NAMESPACE, expect.objectContaining({ en: matrixLabels, zh: matrixLabels }));
+    expect(localeRegister).toHaveBeenCalledWith(SETTINGS_NAMESPACE, expect.objectContaining({ en: matrixLabels, zh: matrixZhLabels }));
     expect(registeredComponent).toBe(MatrixSettingsCard);
     const injected = (registeredOptions.inject as () => Record<string, unknown>)();
     expect(injected.workspaceSource).toBe(workspaceSource);
