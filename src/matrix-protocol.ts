@@ -230,7 +230,7 @@ function escapeEnvelopeAttribute(value: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
-    .replace(/\r?\n/g, " ");
+    .replace(/[\r\n\u2028\u2029]+/g, " ");
 }
 
 /** Remove reply fallback markup and the configured bot mention while retaining human text. */
@@ -267,9 +267,9 @@ export function renderMatrixContextPrompt(
     const trigger = record.eventId === triggerEventId ? " trigger=true" : "";
     const eventId = escapeEnvelopeAttribute(record.eventId);
     const sender = escapeEnvelopeAttribute(record.sender);
-    const displayName = escapeEnvelopeAttribute(record.displayName);
+    const displayName = escapeEnvelopeAttribute(record.displayName.slice(0, MAX_PROVENANCE_CHARS));
     lines.push(`<record index="${index + 1}" event_id="${eventId}" sender="${sender}"${trigger} display_name="${displayName}">`);
-    lines.push(`Speaker: ${record.displayName} (${record.sender})`);
+    lines.push(`Speaker: ${displayName} (${sender})`);
     lines.push(record.text);
     lines.push("</record>");
   });
