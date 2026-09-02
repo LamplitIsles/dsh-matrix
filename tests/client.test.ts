@@ -8,6 +8,7 @@ import { MatrixSettingsCard, type WorkspaceSource } from "../src/client/settings
 describe("client settings registration", () => {
   it("injects the alpha.3 workspaces service and passes its live source to the card", () => {
     expect(inject).toContain("workspaces");
+    expect(inject).toContain("remote.credentials");
     const workspaceSource = {
       getSnapshot: () => undefined as never,
       subscribe: () => () => undefined

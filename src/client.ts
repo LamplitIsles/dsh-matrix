@@ -12,7 +12,7 @@ import { decodeSettings } from "./settings-client.js";
 import { MatrixSettingsCard, type CredentialApi, type ReadinessApi, type WorkspaceSource } from "./client/settings-card.js";
 import { matrixLocale, type MatrixLocaleKey } from "./client/labels.js";
 
-export const inject = ["connection", "locale", "remote", "settingsScope", "slots", "workspaces"] as const;
+export const inject = ["connection", "locale", "remote", "remote.credentials", "settingsScope", "slots", "workspaces"] as const;
 
 declare module "@deepseek-ai/dsh-client-ui-slots" {
   interface LocaleNamespaceMap {
