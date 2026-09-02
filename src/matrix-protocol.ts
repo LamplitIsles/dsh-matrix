@@ -255,9 +255,6 @@ export async function admitMatrixEvent(
   const content = matrixEventContent(event);
   const msgtype = content.msgtype;
   if (msgtype !== "m.text") return undefined;
-  // The bridge deliberately has no HTML renderer. Treat formatted payloads as
-  // unsupported even when a client also supplies a readable plain `body`.
-  if (Object.hasOwn(content, "format") || Object.hasOwn(content, "formatted_body")) return undefined;
   if (relationIsUnsupported(content)) return undefined;
   const body = typeof content.body === "string" ? content.body : "";
   const text = cleanMatrixPrompt(body, settings.userId);

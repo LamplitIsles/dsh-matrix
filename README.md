@@ -71,6 +71,9 @@ prepared. It accepts new `m.room.message` text events from the allowed room and
 ignores history, pagination, notices, the bot's own messages,
 edits/replacements, threads, empty text, and duplicate event IDs. Reply
 fallback markup and the bot mention are removed before the prompt is sent.
+Element reply envelopes may include `format`/`formatted_body`; the bridge
+verifies the referenced event author and uses only the plaintext `body`.
+Formatted HTML is never rendered or treated as prompt content.
 
 Admitted prompts are serialized because they share one locked Agent. Matrix
 room, sender, and event identity remain bounded plugin provenance on the DSH
@@ -94,7 +97,8 @@ client are hard boundaries, not UI suggestions.
 ## Unsupported limitations
 
 This alpha intentionally does not support end-to-end encryption or crypto/device
-persistence, media/files, formatted HTML, threads, reactions, moderation,
+persistence, media/files, formatted HTML rendering (formatted reply HTML is
+ignored), threads, reactions, moderation,
 invites/auto-join, streaming output or `m.replace` edits, multiple rooms or
 accounts, per-room/session selection, live switching, automatic session
 creation, password/SSO login, durable sync tokens, durable deduplication,

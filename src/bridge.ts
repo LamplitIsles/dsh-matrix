@@ -55,7 +55,7 @@ export interface BridgeAgent extends Pick<Agent, "id" | "followup"> {
     id?: string;
     events?: readonly SessionEventLike[];
   };
-  whenIdle?: () => Promise<void>;
+  whenIdle: () => Promise<void>;
 }
 
 export interface BridgeAgentHandle {
@@ -177,7 +177,7 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 
 function recordedModelSelection(inspection: SessionInspectionLike): ModelSelection | undefined {
   let selection: ModelSelection | undefined;
-  for (const event of inspection.events ?? []) {
+  for (const event of inspection.events) {
     if (event.type !== "request/header" || !event.data || typeof event.data !== "object") continue;
     const header = (event.data as { header?: unknown }).header;
     if (!header || typeof header !== "object") continue;
@@ -395,7 +395,7 @@ export class MatrixBridge {
       this.boundAgent = live;
       return true;
     }
-    const recordedPreset = selected.inspection.meta?.agentPreset ?? selected.inspection.header?.agentPreset;
+    const recordedPreset = selected.inspection.meta.agentPreset;
     const recordedSelection = recordedModelSelection(selected.inspection);
     try {
       if (this.stopped) return false;
@@ -540,13 +540,13 @@ export class MatrixBridge {
       this.reportError();
       return;
     }
-    // Real Agent.followup is synchronous; waiting for idle gives fakes and
-    // resumed loops a chance to publish their final session event before the
-    // exact-turn promise falls back to persisted events.
-    let idleFinished = this.boundAgent.whenIdle === undefined;
+    // Real Agent.followup is synchronous; waiting for idle gives the Agent a
+    // chance to publish its final session event before persisted fallback.
+    const agent = this.boundAgent;
+    let idleFinished = false;
     const idle = (async () => {
       try {
-        await this.boundAgent?.whenIdle?.();
+        await agent.whenIdle();
       } catch {
         this.reportError();
       } finally {
@@ -559,12 +559,11 @@ export class MatrixBridge {
     await Promise.race([idle, wait]);
     const pending = this.pendingTurns.get(String(userMessage.id));
     if (idleFinished && pending) {
-      if (pending.turn !== undefined && this.boundAgent.session?.events) {
-        this.finishTurn(String(userMessage.id), finalAssistantTextForTurn(this.boundAgent.session.events, pending.turn));
+      if (pending.turn !== undefined && agent.session?.events) {
+        this.finishTurn(String(userMessage.id), finalAssistantTextForTurn(agent.session.events, pending.turn));
       } else {
-        // A rejected inbox item can settle without a turn claim. Likewise, a
-        // fake or older Agent may expose only the live event callbacks. Once
-        // whenIdle resolves, no later output can belong to this message.
+        // A rejected inbox item can settle without a turn claim. Once whenIdle
+        // resolves, no later output can belong to this message.
         this.finishTurn(String(userMessage.id), pending.interrupted ? undefined : pending.text);
       }
     }

@@ -38,6 +38,7 @@ function matrixEvent(id: string, body: string, extra: Record<string, unknown> = 
 describe("MatrixBridge", () => {
   it("locks a live agent and relays only its final assistant text", async () => {
     const client = new FakeClient();
+    let idleCalls = 0;
     const agent: BridgeAgent = {
       id: "session" as never,
       followup(message) {
@@ -46,7 +47,7 @@ describe("MatrixBridge", () => {
         bridge.onSessionEvent({ id: "session" }, { type: "assistant/message", data: { turn: 7, step: 2, message: { role: "assistant", content: [{ type: "text", text: "final answer" }], source: { kind: "model", provider: "p", model: "m" } } } });
         bridge.onSessionEvent({ id: "session" }, { type: "turn/end", data: { turn: 7, reason: { kind: "completed" } } });
       },
-      whenIdle: async () => undefined
+      whenIdle: async () => { idleCalls += 1; }
     };
     const deps = baseDeps(client, agent);
     const bridge = new MatrixBridge(deps);
@@ -56,6 +57,7 @@ describe("MatrixBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(client.sent).toEqual([{ roomId: "!allowed:example", content: { msgtype: "m.text", body: "final answer" } }]);
     expect(bridge.agent).toBe(agent);
+    expect(idleCalls).toBe(1);
     await bridge.stop();
     expect(client.stopped).toBe(true);
   });

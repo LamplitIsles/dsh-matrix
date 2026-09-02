@@ -64,6 +64,40 @@ describe("Matrix admission", () => {
     expect((await admitMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), { ...settings, respondToAll: true }, client))?.text).toBe("ordinary");
   });
 
+  it("accepts an Element reply envelope while using only its plaintext body", async () => {
+    const botEvent = event({ eventId: "$bot", sender: "@bot:example", content: { msgtype: "m.text", body: "answer" } });
+    const reply = event({ content: {
+      msgtype: "m.text",
+      body: "follow up",
+      format: "org.matrix.custom.html",
+      formatted_body: "<mx-reply><blockquote>answer</blockquote></mx-reply><p>follow up</p>",
+      "m.relates_to": { "m.in_reply_to": { event_id: "$bot" } }
+    } });
+    const replyClient: MatrixClientLike = { getRoom: () => ({ getTimeline: () => [botEvent] }) };
+    expect((await admitMatrixEvent(reply, settings, replyClient))?.text).toBe("follow up");
+    const nonBotReply = event({ eventId: "$human-reply", content: {
+      msgtype: "m.text",
+      body: "not for the bot",
+      format: "org.matrix.custom.html",
+      formatted_body: "<p>not for the bot</p>",
+      "m.relates_to": { "m.in_reply_to": { event_id: "$human" } }
+    } });
+    const nonBotTarget = event({ eventId: "$human", sender: "@other:example", content: { msgtype: "m.text", body: "human message" } });
+    expect(await admitMatrixEvent(nonBotReply, settings, { getRoom: () => ({ getTimeline: () => [nonBotTarget] }) })).toBeUndefined();
+    expect((await admitMatrixEvent(event({ content: {
+      msgtype: "m.text",
+      body: "ordinary html",
+      format: "org.matrix.custom.html",
+      formatted_body: "<p>ordinary html</p>"
+    } }), settings, client))?.text).toBeUndefined();
+    expect((await admitMatrixEvent(event({ content: {
+      msgtype: "m.text",
+      body: "ordinary html",
+      format: "org.matrix.custom.html",
+      formatted_body: "<p>ordinary html</p>"
+    } }), { ...settings, respondToAll: true }, client))?.text).toBe("ordinary html");
+  });
+
   it("keeps duplicate tracking bounded", () => {
     const dedupe = new EventDeduper(2);
     dedupe.add("a"); dedupe.add("b"); dedupe.add("c");

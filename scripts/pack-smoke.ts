@@ -233,6 +233,7 @@ async function main(): Promise<void> {
       settingsScope: { bind: () => ({ getSnapshot: () => ({ status: "loading", mode: "host", writable: false }), subscribe: () => () => undefined, set: async () => undefined, unset: async () => undefined }) },
       remote: { credentials: { describe: async () => ({ ok: true, value: {} }), set: async () => ({ ok: true }) } },
       connection: { isLoopback: true, rpc: { call: async () => ({ ok: true, value: { state: "disabled" } }) } },
+      workspaces: { list: { getSnapshot: () => ({ items: [], archivedSessionIds: [], state: "idle", phase: "ready", error: null }), subscribe: () => () => undefined } },
       slots: { inject: () => undefined, register: () => undefined },
       effect: (factory: () => unknown) => { clientDisposers.push(factory()); }
     });

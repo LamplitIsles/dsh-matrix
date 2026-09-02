@@ -15,10 +15,8 @@ export interface SessionEventLike {
 }
 
 export interface SessionInspectionLike {
-  meta?: SessionHeaderLike;
-  header?: SessionHeaderLike;
-  events?: readonly SessionEventLike[];
-  [key: string]: unknown;
+  meta: SessionHeaderLike;
+  events: readonly SessionEventLike[];
 }
 
 export interface WorkspaceLike {
@@ -53,7 +51,7 @@ function hasHumanPromptContent(data: unknown): boolean {
 /** Return the latest timestamp at which a persisted human user prompt entered the session. */
 export function lastHumanPromptAt(inspection: SessionInspectionLike): number | undefined {
   let latest: number | undefined;
-  for (const event of inspection.events ?? []) {
+  for (const event of inspection.events) {
     if (event.type !== "user/message" || sourceKind(event.data) !== "user" || !hasHumanPromptContent(event.data)) continue;
     const time = typeof event.time === "number" && Number.isFinite(event.time) ? event.time : undefined;
     if (time !== undefined && (latest === undefined || time > latest)) latest = time;
@@ -77,10 +75,7 @@ export function selectMostRecentEligibleSession(
     if (archivedSessionIds.has(sessionId)) continue;
     const inspection = inspections.get(sessionId);
     if (!inspection) continue;
-    // SessionController currently exposes the header as `meta`; tolerate the
-    // older/fixture-shaped `header` field too, and let either one mark a row as
-    // a subagent when both are present.
-    const origin = inspection.meta?.origin ?? inspection.header?.origin;
+    const origin = inspection.meta.origin;
     if (origin === "subagent") continue;
     const last = lastHumanPromptAt(inspection);
     if (last === undefined) continue;
