@@ -103,10 +103,23 @@ function field(renderer: ReactTestRenderer, name: string) {
 async function renderCard(cardProps: MatrixSettingsCardProps) {
   let renderer!: ReactTestRenderer;
   await act(async () => { renderer = create(<MatrixSettingsCard {...cardProps} />); });
+  const headers = renderer.root.findAllByProps({ "data-plugin-card-header": "dsh-matrix" });
+  if (headers[0]) await act(async () => { headers[0].props.onClick(); });
   return renderer;
 }
 
 describe("MatrixSettingsCard", () => {
+  it("matches native plugin disclosure behavior by starting collapsed", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<MatrixSettingsCard {...props(scopeFixture())} />); });
+    const header = renderer.root.findByProps({ "data-plugin-card-header": "dsh-matrix" });
+    expect(header.props["aria-expanded"]).toBe(false);
+    expect(renderer.root.findAllByProps({ "data-settings-field": "homeserverUrl" })).toHaveLength(0);
+    await act(async () => { header.props.onClick(); });
+    expect(renderer.root.findByProps({ "data-settings-field": "homeserverUrl" })).toBeTruthy();
+    renderer.unmount();
+  });
+
   it("hides an unavailable namespace and renders workspace/credential/readiness state when ready", async () => {
     const unavailable = scopeFixture({ status: "loading" });
     const unavailableRenderer = await renderCard(props(unavailable));
@@ -159,6 +172,7 @@ describe("MatrixSettingsCard", () => {
     await act(async () => { field(renderer, "accessToken").props.onChange({ target: { value: "  replacement-token  " } }); });
     await act(async () => { renderer.root.findByProps({ children: "Save" }).props.onClick(); });
     expect(credentials.setCalls).toEqual([{ ref: "DSH_MATRIX_ACCESS_TOKEN", value: "replacement-token" }]);
+    await act(async () => { renderer.root.findByProps({ "data-plugin-card-header": "dsh-matrix" }).props.onClick(); });
     expect(field(renderer, "accessToken").props.value).toBe("");
     renderer.unmount();
   });

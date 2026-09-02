@@ -1,4 +1,4 @@
-import { createElement, useEffect, useId, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createElement, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { WorkspaceSnapshot } from "@deepseek-ai/dsh-api-workspace-controller/client";
 import type { SettingsScope, SettingsScopeSnapshot } from "@deepseek-ai/dsh-client-ui-settings/client";
 import styles from "./matrix.module.dshcss";
@@ -121,21 +121,41 @@ interface CardFrameProps {
 
 /** Local equivalent of DSH's PluginCard chrome (the upstream card is not a runtime export). */
 function PluginCardFrame(props: CardFrameProps) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
+  const saveStarted = useRef(false);
+  useEffect(() => {
+    if (props.state.saving) {
+      saveStarted.current = true;
+      return;
+    }
+    if (!saveStarted.current) return;
+    saveStarted.current = false;
+    if (!props.state.dirty && !props.state.failed) setOpen(false);
+  }, [props.state.dirty, props.state.failed, props.state.saving]);
   if (!props.state.available) return null;
-  return createElement("section", { className: styles.settingsCard, "data-plugin-card": SETTINGS_NAMESPACE },
+  const bodyId = `${SETTINGS_NAMESPACE}-settings-body`;
+  return createElement("li", { className: `${styles.card} ${open ? styles.cardOpen : ""}`, "data-plugin-card": SETTINGS_NAMESPACE },
     createElement("button", {
       type: "button",
-      className: styles.label,
+      className: styles.header,
       "aria-expanded": open,
+      "aria-controls": bodyId,
+      "aria-label": `${open ? "Collapse" : "Expand"}: ${props.title}`,
+      "data-plugin-card-header": SETTINGS_NAMESPACE,
       onClick: () => setOpen((value) => !value)
-    }, props.title, props.state.dirty ? ` · ${props.unsavedLabel}` : ""),
-    createElement("p", { className: styles.hint }, props.description),
-    open ? createElement("div", null,
+    },
+    createElement("span", { className: styles.headText },
+      createElement("span", { className: styles.name }, props.title),
+      createElement("span", { className: styles.description }, props.description)
+    ),
+    props.state.dirty ? createElement("span", { className: styles.pending }, props.unsavedLabel) : null,
+    createElement("span", { className: `${styles.chevron} ${open ? styles.chevronOpen : ""}`, "aria-hidden": true })
+    ),
+    open ? createElement("div", { id: bodyId, className: styles.body },
       !props.state.writable ? createElement("p", { className: styles.status, role: "status" }, props.readOnlyLabel) : null,
       props.children,
-      props.state.failed ? createElement("p", { className: `${styles.status} ${styles.invalid}`, role: "status" }, props.failedLabel) : null,
       createElement("div", { className: styles.footer },
+        props.state.failed ? createElement("p", { className: `${styles.status} ${styles.invalid}`, role: "status" }, props.failedLabel) : null,
         createElement("button", { type: "button", className: styles.discard, disabled: !props.state.dirty || props.state.saving, onClick: props.onDiscard }, props.discardLabel),
         createElement("button", { type: "button", className: styles.save, disabled: !props.state.dirty || props.state.invalid || props.state.saving || !props.state.writable, onClick: props.onSave }, props.state.saving ? props.savingLabel : props.saveLabel)
       )
@@ -299,7 +319,7 @@ export function MatrixSettingsCard({ scope, api, readiness, workspaceSource, t }
     readOnlyLabel: text("readOnly"),
     failedLabel: text("saveFailed")
   },
-  createElement("div", { className: styles.settingsCard, "data-settings-card": SETTINGS_NAMESPACE },
+  createElement("div", { className: styles.form, "data-settings-card": SETTINGS_NAMESPACE },
     createElement("div", { className: styles.settingsGrid },
       input("homeserverUrl", "homeserverUrl", "homeserverHint"),
       input("userId", "userId", "userIdHint"),

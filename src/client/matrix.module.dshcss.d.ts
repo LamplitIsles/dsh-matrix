@@ -1,5 +1,15 @@
 declare const classes: {
-  readonly settingsCard: string;
+  readonly card: string;
+  readonly cardOpen: string;
+  readonly header: string;
+  readonly headText: string;
+  readonly name: string;
+  readonly description: string;
+  readonly pending: string;
+  readonly chevron: string;
+  readonly chevronOpen: string;
+  readonly body: string;
+  readonly form: string;
   readonly settingsGrid: string;
   readonly field: string;
   readonly label: string;
