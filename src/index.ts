@@ -130,13 +130,11 @@ export type {
 export {
   createMatrixToolDefinitions,
   listJoinedMatrixMembers,
-  resolveMatrixMentionLabels,
   MATRIX_LIST_ROOM_MEMBERS,
   MATRIX_SEND_ROOM_MESSAGE
 } from "./matrix-tools.js";
 export type {
   MatrixListRoomMembersResult,
-  MatrixMentionResolution,
   MatrixRoomMember,
   MatrixSendRoomMessageResult,
   MatrixToolDependencies

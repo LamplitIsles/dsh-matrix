@@ -37,12 +37,6 @@ export interface MatrixSendRoomMessageResult {
   sent: true;
 }
 
-export interface MatrixMentionResolution {
-  userIds: string[];
-  /** Current display labels safe to offer as correction data. */
-  validDisplayLabels: string[];
-}
-
 class MatrixMentionCorrectionError extends Error {}
 
 function abortError(): Error {
@@ -65,7 +59,17 @@ function mentionCorrectionError(label: unknown, validDisplayLabels: readonly str
   const requested = typeof label === "string"
     ? label.slice(0, MAX_ROOM_MEMBER_ID_CHARS)
     : typeof label === "undefined" ? "" : String(label).slice(0, MAX_ROOM_MEMBER_ID_CHARS);
-  return new MatrixMentionCorrectionError(`Matrix mention label ${JSON.stringify(requested)} is unavailable or ambiguous. Valid display labels: ${JSON.stringify(validDisplayLabels)}`);
+  const requestedJson = JSON.stringify(requested);
+  const prefix = `Matrix mention label ${requestedJson} is unavailable or ambiguous. Valid display labels: `;
+  const bounded = [...validDisplayLabels];
+  let message = `${prefix}${JSON.stringify(bounded)}`;
+  // Bound the complete correction error, not only the JSON array. Trimming
+  // whole labels preserves valid JSON and deterministic correction data.
+  while (message.length > MAX_PROMPT_CHARS && bounded.length > 0) {
+    bounded.pop();
+    message = `${prefix}${JSON.stringify(bounded)}`;
+  }
+  return new MatrixMentionCorrectionError(message);
 }
 
 function ensureNotAborted(signal: AbortSignal): void {
@@ -192,7 +196,7 @@ function validDisplayLabels(members: readonly MatrixRoomMember[]): string[] {
   for (const member of members) {
     // An ID fallback is useful in the roster, but is deliberately not an
     // Agent-facing mention label: mention arguments remain display-label-only.
-    if (member.displayName === member.userId || isMatrixUserId(member.displayName)) continue;
+    if (member.displayName === member.userId || member.displayName === "@room" || isMatrixUserId(member.displayName)) continue;
     labels.add(member.displayName);
   }
   for (const label of labels) {
@@ -213,10 +217,7 @@ function sameRoster(left: readonly MatrixRoomMember[], right: readonly MatrixRoo
   });
 }
 
-function resolveMentionLabelsFromRoster(
-  roster: readonly MatrixRoomMember[],
-  labels: readonly unknown[]
-): MatrixMentionResolution {
+function resolveMentionLabelsFromRoster(roster: readonly MatrixRoomMember[], labels: readonly unknown[]): string[] {
   const validLabels = validDisplayLabels(roster);
   if (labels.length > MAX_ROOM_MEMBERS) {
     throw mentionCorrectionError(labels[MAX_ROOM_MEMBERS], validLabels);
@@ -236,16 +237,7 @@ function resolveMentionLabelsFromRoster(
       userIds.push(userId);
     }
   }
-  return { userIds, validDisplayLabels: validLabels };
-}
-
-/** Resolve only exact, unique labels from a bounded local joined-room roster. */
-export function resolveMatrixMentionLabels(
-  client: MatrixClientLike | undefined,
-  roomId: string,
-  labels: readonly unknown[]
-): MatrixMentionResolution {
-  return resolveMentionLabelsFromRoster(listJoinedMatrixMembers(client, roomId), labels);
+  return userIds;
 }
 
 /** Build exactly the two native definitions for one locked Companion scope. */
@@ -343,7 +335,7 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
           }
           // Resolve against the verified second snapshot too. This keeps the
           // IDs and labels in one coherent local roster snapshot.
-          mentionUserIds = resolveMentionLabelsFromRoster(currentRoster, rawMentions).userIds;
+          mentionUserIds = resolveMentionLabelsFromRoster(currentRoster, rawMentions);
         }
         const content = matrixTextMessage(deps.roomId, body, undefined, mentionUserIds);
         if (client.sendMessage) {

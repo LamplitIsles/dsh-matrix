@@ -161,6 +161,43 @@ describe("fixed-room Matrix tools", () => {
     expect(sent).toHaveLength(0);
   });
 
+  it("does not advertise @room in the correction labels", async () => {
+    const client: MatrixClientLike = {
+      getRoom: () => ({
+        getJoinedMembers: () => [
+          { userId: "@room-member:example", name: "@room", membership: "join" },
+          { userId: "@alice:example", name: "Alice", membership: "join" }
+        ]
+      })
+    };
+    const tool = definitions(client)[1]!;
+    await expect(tool.execute({ body: "must not send", mentions: ["Missing"] }, execution()))
+      .rejects.toThrow(/Valid display labels: \["Alice"\]$/);
+  });
+
+  it("bounds the complete adversarial correction error without stable IDs", async () => {
+    const members = Array.from({ length: MAX_ROOM_MEMBERS }, (_, index) => ({
+      userId: `@member-${String(index).padStart(3, "0")}:example`,
+      name: `label-${String(index).padStart(3, "0")}-${"\\\"".repeat(250)}`,
+      membership: "join"
+    }));
+    const client: MatrixClientLike = {
+      getRoom: () => ({ getJoinedMembers: () => members })
+    };
+    const tool = definitions(client)[1]!;
+    let failure: unknown;
+    try {
+      await tool.execute({ body: "must not send", mentions: ["unknown"] }, execution());
+    } catch (error) {
+      failure = error;
+    }
+    const message = (failure as Error | undefined)?.message ?? "";
+    expect(message.length).toBeLessThanOrEqual(MAX_PROMPT_CHARS);
+    expect(message).toContain('Matrix mention label "unknown"');
+    expect(message).toMatch(/Valid display labels: \[[\s\S]*\]$/);
+    for (const member of members) expect(message).not.toContain(member.userId);
+  });
+
   it("fails closed when the local roster changes after label resolution", async () => {
     const sent: Array<Record<string, unknown>> = [];
     let reads = 0;
