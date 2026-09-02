@@ -42,7 +42,7 @@ export interface MatrixClientLike {
   sendMessage?: (roomId: string, content: Record<string, unknown>) => Promise<unknown>;
   sendEvent?: (roomId: string, type: string, content: Record<string, unknown>) => Promise<unknown>;
   getRoom?: (roomId: string) => MatrixRoomLike | null | undefined;
-  fetchRoomEvent?: (roomId: string, eventId: string) => Promise<MatrixEventLike>;
+  fetchRoomEvent?: (roomId: string, eventId: string, signal?: AbortSignal) => Promise<MatrixEventLike>;
   getUserId?: () => string | undefined;
 }
 
@@ -230,8 +230,10 @@ async function replyAuthorIsBot(
   client: MatrixClientLike,
   roomId: string,
   eventId: string,
-  userId: string
+  userId: string,
+  signal?: AbortSignal
 ): Promise<boolean> {
+  if (signal?.aborted) return false;
   let local: readonly unknown[] = [];
   try {
     local = roomTimelineEvents(client.getRoom?.(roomId));
@@ -244,7 +246,8 @@ async function replyAuthorIsBot(
   }
   if (!client.fetchRoomEvent) return false;
   try {
-    const target = await client.fetchRoomEvent(roomId, eventId);
+    const target = await client.fetchRoomEvent(roomId, eventId, signal);
+    if (signal?.aborted) return false;
     return matrixEventSender(target) === userId;
   } catch {
     return false;
@@ -280,36 +283,19 @@ export class EventDeduper {
 }
 
 /**
- * Check one Matrix timeline callback and return an admitted prompt. The caller
- * owns dedupe state and invokes this only after initial sync is prepared.
- */
-export async function admitMatrixEvent(
-  event: MatrixEventLike,
-  settings: Pick<MatrixSettings, "roomId" | "userId" | "respondToAll">,
-  client: MatrixClientLike,
-  toStartOfTimeline = false,
-  data?: MatrixTimelineData
-): Promise<AdmittedMatrixMessage | undefined> {
-  const captured = await captureMatrixEvent(event, settings, client, toStartOfTimeline, data);
-  if (!captured?.trigger) return undefined;
-  // Keep the original admission shape for callers that only need a trigger;
-  // the richer `trigger` marker is the capture API used by the bridge.
-  const { trigger: _trigger, ...admitted } = captured;
-  return admitted;
-}
-
-/**
- * Capture one eligible event and classify whether it opens a turn. Unlike
- * {@link admitMatrixEvent}, ordinary mention-only room messages are returned
- * with `trigger: false` so the bridge can retain them as context.
+ * Capture one eligible event and classify whether it opens a turn. Ordinary
+ * mention-only room messages are returned with `trigger: false` so the bridge
+ * can retain them as context.
  */
 export async function captureMatrixEvent(
   event: MatrixEventLike,
   settings: Pick<MatrixSettings, "roomId" | "userId" | "respondToAll">,
   client: MatrixClientLike,
   toStartOfTimeline = false,
-  data?: MatrixTimelineData
+  data?: MatrixTimelineData,
+  signal?: AbortSignal
 ): Promise<AdmittedMatrixMessage | undefined> {
+  if (signal?.aborted) return undefined;
   if (toStartOfTimeline || data?.timeline === "back-paginate" || data?.timeline === "forward-paginate" || data?.liveEvent === false) return undefined;
   if (matrixEventType(event) !== "m.room.message") return undefined;
   const roomId = matrixEventRoomId(event);
@@ -330,7 +316,7 @@ export async function captureMatrixEvent(
   const replyId = isReplyRelation(relatesTo(content));
   let trigger = settings.respondToAll;
   if (!trigger) {
-    const reply = replyId ? await replyAuthorIsBot(client, roomId, replyId, settings.userId) : false;
+    const reply = replyId ? await replyAuthorIsBot(client, roomId, replyId, settings.userId, signal) : false;
     trigger = hasMention(content, settings.userId) || reply;
   }
   const source: MatrixProvenance = {

@@ -15,6 +15,8 @@ export interface MatrixToolDependencies {
   getClient: () => MatrixClientLike | undefined;
   /** The restart-scoped room allowlist; tools deliberately have no room argument. */
   roomId: string;
+  /** The bridge gate; tools are unavailable before prepared sync or after failure. */
+  isReady: () => boolean;
 }
 
 export interface MatrixListRoomMembersResult {
@@ -33,12 +35,26 @@ function unavailableError(): Error {
   return new Error("Matrix connection or the configured room is unavailable.");
 }
 
+function notReadyError(): Error {
+  return new Error("Matrix bridge is not ready: initial sync is not prepared.");
+}
+
 function sendFailureError(): Error {
   return new Error("Matrix room message could not be sent.");
 }
 
 function ensureNotAborted(signal: AbortSignal): void {
   if (signal.aborted) throw abortError();
+}
+
+function ensureReady(deps: MatrixToolDependencies): void {
+  let ready = false;
+  try {
+    ready = deps.isReady();
+  } catch {
+    ready = false;
+  }
+  if (!ready) throw notReadyError();
 }
 
 function memberUserId(member: unknown): string | undefined {
@@ -147,12 +163,15 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
     async execute(_args, exec): Promise<MatrixListRoomMembersResult> {
       const signal = toolSignal(exec);
       ensureNotAborted(signal);
+      ensureReady(deps);
       try {
         const value = { userIds: listJoinedMatrixUserIds(deps.getClient(), deps.roomId) };
         ensureNotAborted(signal);
+        ensureReady(deps);
         return value;
       } catch (error) {
         if (signal.aborted) throw abortError();
+        if (error instanceof Error && error.message === "Matrix bridge is not ready: initial sync is not prepared.") throw error;
         if (error instanceof Error && error.message === "Matrix connection or the configured room is unavailable.") throw error;
         throw unavailableError();
       }
@@ -176,11 +195,13 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
     async execute(args, exec): Promise<MatrixSendRoomMessageResult> {
       const signal = toolSignal(exec);
       ensureNotAborted(signal);
+      ensureReady(deps);
       const body = (args as { body?: unknown } | undefined)?.body;
       if (!validMessageBody(body)) {
         throw new Error(`Matrix message body must be non-empty and at most ${MAX_MATRIX_TOOL_BODY_CHARS} characters.`);
       }
       try {
+        ensureReady(deps);
         const client = deps.getClient();
         if (!client || !deps.roomId.trim()) throw unavailableError();
         const content = matrixTextMessage(deps.roomId, body);
@@ -192,9 +213,11 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
           throw sendFailureError();
         }
         ensureNotAborted(signal);
+        ensureReady(deps);
         return { sent: true };
       } catch (error) {
         if (signal.aborted) throw abortError();
+        if (error instanceof Error && error.message === "Matrix bridge is not ready: initial sync is not prepared.") throw error;
         if (error instanceof Error && (error.message === "Matrix room message could not be sent." || error.message === "Matrix connection or the configured room is unavailable.")) throw error;
         throw sendFailureError();
       }

@@ -4,6 +4,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 import {
   CREDENTIAL_REF,
+  CLASSIFICATION_STOP_TIMEOUT_MS,
   DEFAULT_SETTINGS,
   DEDUPE_LIMIT,
   MAX_PROMPT_CHARS,
@@ -125,6 +126,8 @@ interface SessionEventEnvelope {
   session?: { id?: string };
 }
 
+const CONTEXT_BOUND_TRIGGER_ID = "x".repeat(MAX_PROVENANCE_CHARS);
+
 function idOf(value: unknown): string | undefined {
   if (typeof value === "string" && value) return value;
   if (typeof value === "object" && value !== null) {
@@ -189,6 +192,18 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   return typeof value === "object" && value !== null && typeof (value as { then?: unknown }).then === "function";
 }
 
+async function waitWithin(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise.catch(() => undefined),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function recordedModelSelection(inspection: SessionInspectionLike): ModelSelection | undefined {
   let selection: ModelSelection | undefined;
   for (const event of inspection.events) {
@@ -232,6 +247,7 @@ export class MatrixBridge {
   private queueTail: Promise<void> = Promise.resolve();
   private queueGeneration = 0;
   private classificationTail: Promise<void> = Promise.resolve();
+  private readonly classificationController = new AbortController();
   private lastUnboundNoticeAt = -Infinity;
   private readonly contextBufferValue: MatrixContextRecord[] = [];
   private contextCharacters = 0;
@@ -503,7 +519,8 @@ export class MatrixBridge {
     try {
       for (const definition of createMatrixToolDefinitions({
         getClient: () => this.client,
-        roomId: this.settings.roomId
+        roomId: this.settings.roomId,
+        isReady: () => !this.stopped && this.prepared && this.accepting && this.client !== undefined
       })) {
         const dispose = registry.register(definition);
         if (typeof dispose !== "function") throw new Error("tool registration did not return a disposer");
@@ -558,6 +575,10 @@ export class MatrixBridge {
   private onSync(state: unknown): void {
     if (this.stopped) return;
     if (state === "ERROR") {
+      // A failed sync is a hard intake/tool gate. Keep the client reference for
+      // orderly teardown, but never let an old connection serve a tool call.
+      this.prepared = false;
+      this.accepting = false;
       this.setReadiness({
         state: "failed",
         detail: "matrix-start-failed",
@@ -590,11 +611,11 @@ export class MatrixBridge {
         try {
           await this.captureTimelineEvent(event, toStartOfTimeline, data);
         } finally {
-          this.pendingEventIds.delete(eventId);
+          if (!this.stopped) this.pendingEventIds.delete(eventId);
         }
       });
     this.classificationTail = run.catch(() => {
-      this.reportError();
+      if (!this.stopped) this.reportError();
     });
     await run;
   }
@@ -603,7 +624,7 @@ export class MatrixBridge {
     if (!this.accepting || !this.prepared || this.stopped || !this.client) return;
     let message: AdmittedMatrixMessage | undefined;
     try {
-      message = await captureMatrixEvent(event, this.settings, this.client, toStartOfTimeline, data);
+      message = await captureMatrixEvent(event, this.settings, this.client, toStartOfTimeline, data, this.classificationController.signal);
     } catch {
       this.reportError();
       return;
@@ -639,12 +660,35 @@ export class MatrixBridge {
       text: message.text
     };
     this.contextBufferValue.push(record);
-    this.contextCharacters += record.text.length;
-    while (this.contextCharacters > MAX_PROMPT_CHARS && this.contextBufferValue.length > 0) {
+    // Bound the rendered envelope, not just body characters. This accounts for
+    // sender/event/room metadata and delimiters supplied with every record.
+    // Reserve the maximum bounded trigger identity even before a trigger
+    // arrives, so a later model envelope cannot exceed the same cap merely
+    // because its trigger line is longer than an ordinary-buffer measurement.
+    const triggerEventId = message.trigger ? record.eventId : CONTEXT_BOUND_TRIGGER_ID;
+    while (this.renderedContextLength(triggerEventId) > MAX_PROMPT_CHARS && this.contextBufferValue.length > 1) {
       const oldest = this.contextBufferValue.shift();
       if (!oldest) break;
-      this.contextCharacters -= oldest.text.length;
     }
+    if (this.renderedContextLength(triggerEventId) > MAX_PROMPT_CHARS) this.boundNewestContextRecord(record, triggerEventId);
+    this.contextCharacters = this.contextBufferValue.reduce((total, candidate) => total + candidate.text.length, 0);
+  }
+
+  private renderedContextLength(triggerEventId: string): number {
+    return renderMatrixContextPrompt(this.contextBufferValue, triggerEventId).length;
+  }
+
+  private boundNewestContextRecord(record: MatrixContextRecord, triggerEventId: string): void {
+    const original = record.text;
+    let low = 0;
+    let high = original.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      record.text = original.slice(0, mid);
+      if (this.renderedContextLength(triggerEventId) <= MAX_PROMPT_CHARS) low = mid;
+      else high = mid - 1;
+    }
+    record.text = original.slice(0, low).trimEnd();
   }
 
   private drainContext(): readonly MatrixContextRecord[] {
@@ -787,6 +831,8 @@ export class MatrixBridge {
     this.stopped = true;
     this.accepting = false;
     this.queueGeneration += 1;
+    this.classificationController.abort();
+    const classificationTail = this.classificationTail;
     for (const pending of [...this.pendingTurns.values()]) this.finishTurn(pending.messageId, undefined);
     for (const dispose of this.listeners.splice(0)) {
       try { dispose(); } catch { this.reportError(); }
@@ -795,6 +841,7 @@ export class MatrixBridge {
     this.client = undefined;
     this.disposeAgentTools();
     try { await client?.stopClient?.(); } catch { this.reportError(); }
+    await waitWithin(classificationTail, CLASSIFICATION_STOP_TIMEOUT_MS);
     await this.queueTail.catch(() => undefined);
     if (this.ownedHandle) {
       const handle = this.ownedHandle;

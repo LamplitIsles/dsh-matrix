@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  admitMatrixEvent,
   captureMatrixEvent,
   cleanMatrixPrompt,
   EventDeduper,
@@ -34,7 +33,7 @@ const client: MatrixClientLike = { getRoom: () => undefined };
 
 describe("Matrix admission", () => {
   it("cleans reply fallback and bot mention while preserving provenance", async () => {
-    const admitted = await admitMatrixEvent(event({ content: {
+    const admitted = await captureMatrixEvent(event({ content: {
       msgtype: "m.text",
       body: "<mx-reply><blockquote>old</blockquote></mx-reply>@bot:example please check",
       "m.mentions": { user_ids: ["@bot:example"] }
@@ -51,26 +50,24 @@ describe("Matrix admission", () => {
     ["edit", { content: { msgtype: "m.text", body: "edit", "m.relates_to": { rel_type: "m.replace" } } }],
     ["thread", { content: { msgtype: "m.text", body: "thread", "m.relates_to": { rel_type: "m.thread" } } }],
     ["unverified relation", { content: { msgtype: "m.text", body: "reference", "m.relates_to": { event_id: "$other" } } }],
-    ["formatted html", { content: { msgtype: "m.text", body: "html", format: "org.matrix.custom.html", formatted_body: "<b>html</b>" } }],
     ["empty", { content: { msgtype: "m.text", body: "   " } }]
   ])("rejects %s", async (_name, input) => {
     const value = input as { toStart?: boolean } & Record<string, unknown>;
-    expect(await admitMatrixEvent(event(value), settings, client, value.toStart)).toBeUndefined();
+    expect(await captureMatrixEvent(event(value), settings, client, value.toStart)).toBeUndefined();
   });
 
   it("verifies a reply target in the local timeline and supports respond-to-all", async () => {
     const botEvent = event({ eventId: "$bot", sender: "@bot:example", content: { msgtype: "m.text", body: "answer" } });
     const reply = event({ content: { msgtype: "m.text", body: "follow up", "m.relates_to": { "m.in_reply_to": { event_id: "$bot" } } } });
     const replyClient: MatrixClientLike = { getRoom: () => ({ getTimeline: () => [botEvent] }) };
-    expect((await admitMatrixEvent(reply, settings, replyClient))?.text).toBe("follow up");
-    expect(await admitMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), settings, client)).toBeUndefined();
-    expect((await admitMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), { ...settings, respondToAll: true }, client))?.text).toBe("ordinary");
+    expect((await captureMatrixEvent(reply, settings, replyClient))?.text).toBe("follow up");
+    expect((await captureMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), settings, client))?.trigger).toBe(false);
+    expect((await captureMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), { ...settings, respondToAll: true }, client))?.text).toBe("ordinary");
   });
 
   it("captures ordinary mention-only text without opening a trigger", async () => {
     const ordinary = await captureMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), settings, client);
     expect(ordinary).toMatchObject({ eventId: "$event", text: "ordinary", trigger: false });
-    expect(await admitMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), settings, client)).toBeUndefined();
     expect((await captureMatrixEvent(event(), settings, client))?.trigger).toBe(true);
   });
 
@@ -101,7 +98,7 @@ describe("Matrix admission", () => {
       "m.relates_to": { "m.in_reply_to": { event_id: "$bot" } }
     } });
     const replyClient: MatrixClientLike = { getRoom: () => ({ getTimeline: () => [botEvent] }) };
-    expect((await admitMatrixEvent(reply, settings, replyClient))?.text).toBe("follow up");
+    expect((await captureMatrixEvent(reply, settings, replyClient))?.text).toBe("follow up");
     const nonBotReply = event({ eventId: "$human-reply", content: {
       msgtype: "m.text",
       body: "not for the bot",
@@ -110,14 +107,14 @@ describe("Matrix admission", () => {
       "m.relates_to": { "m.in_reply_to": { event_id: "$human" } }
     } });
     const nonBotTarget = event({ eventId: "$human", sender: "@other:example", content: { msgtype: "m.text", body: "human message" } });
-    expect(await admitMatrixEvent(nonBotReply, settings, { getRoom: () => ({ getTimeline: () => [nonBotTarget] }) })).toBeUndefined();
-    expect((await admitMatrixEvent(event({ content: {
+    expect((await captureMatrixEvent(nonBotReply, settings, { getRoom: () => ({ getTimeline: () => [nonBotTarget] }) }))?.trigger).toBe(false);
+    expect((await captureMatrixEvent(event({ content: {
       msgtype: "m.text",
       body: "ordinary html",
       format: "org.matrix.custom.html",
       formatted_body: "<p>ordinary html</p>"
-    } }), settings, client))?.text).toBeUndefined();
-    expect((await admitMatrixEvent(event({ content: {
+    } }), settings, client))?.trigger).toBe(false);
+    expect((await captureMatrixEvent(event({ content: {
       msgtype: "m.text",
       body: "ordinary html",
       format: "org.matrix.custom.html",

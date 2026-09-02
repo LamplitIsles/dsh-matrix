@@ -111,7 +111,9 @@ conversation:
   most 16,000 characters and sends one ordinary `m.text` event to the
   configured room. It has no room argument and cannot impersonate, reply, or
   create a thread. The normal DSH tool approval and cancellation pipeline
-  still applies, and unavailable Matrix connections produce bounded errors.
+  still applies. Tools return a bounded not-ready error before initial sync is
+  **PREPARED** and after a sync **ERROR**; other unavailable Matrix connections
+  produce the same bounded failure boundary.
 
 These registrations belong only to the startup-locked Companion and are
 removed when the bridge stops or ownership is released. A Web/CLI-initiated

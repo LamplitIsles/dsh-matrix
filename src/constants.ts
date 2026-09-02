@@ -19,6 +19,8 @@ export const MAX_PROVENANCE_CHARS = 512;
 export const MAX_ROOM_MEMBERS = 128;
 export const MAX_ROOM_MEMBER_ID_CHARS = MAX_PROVENANCE_CHARS;
 export const MAX_MATRIX_TOOL_BODY_CHARS = MAX_PROMPT_CHARS;
+/** Stop waits briefly for classification before safely gating late callbacks. */
+export const CLASSIFICATION_STOP_TIMEOUT_MS = 100;
 
 export interface MatrixSettings {
   homeserverUrl: string;

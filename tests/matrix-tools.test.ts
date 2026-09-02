@@ -13,7 +13,7 @@ function execution(signal = new AbortController().signal): any {
 }
 
 function definitions(client: MatrixClientLike, roomId = "!allowed:example") {
-  return createMatrixToolDefinitions({ getClient: () => client, roomId });
+  return createMatrixToolDefinitions({ getClient: () => client, roomId, isReady: () => true });
 }
 
 describe("fixed-room Matrix tools", () => {

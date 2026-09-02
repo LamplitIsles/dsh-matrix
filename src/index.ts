@@ -105,7 +105,6 @@ export type {
   BridgeReadinessState
 } from "./bridge.js";
 export {
-  admitMatrixEvent,
   captureMatrixEvent,
   cleanMatrixPrompt,
   EventDeduper,

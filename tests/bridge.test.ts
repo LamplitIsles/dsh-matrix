@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { UserMessage } from "@deepseek-ai/dsh-llm";
 import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 import { MatrixBridge, bridgeRpcHandler, finalAssistantTextForTurn, type BridgeAgent, type BridgeDependencies } from "../src/bridge.js";
-import type { MatrixEventLike } from "../src/matrix-protocol.js";
-import { RPC_ENDPOINT } from "../src/constants.js";
+import { renderMatrixContextPrompt, type MatrixEventLike } from "../src/matrix-protocol.js";
+import { MAX_PROVENANCE_CHARS, MAX_PROMPT_CHARS, RPC_ENDPOINT } from "../src/constants.js";
 import { MATRIX_LIST_ROOM_MEMBERS, MATRIX_SEND_ROOM_MESSAGE } from "../src/matrix-tools.js";
 
 class FakeClient extends EventEmitter {
@@ -14,7 +14,7 @@ class FakeClient extends EventEmitter {
   async stopClient() { this.stopped = true; }
   async sendMessage(roomId: string, content: Record<string, unknown>) { this.sent.push({ roomId, content }); }
   getRoom() { return undefined; }
-  async fetchRoomEvent(): Promise<MatrixEventLike> { throw new Error("not found"); }
+  async fetchRoomEvent(_roomId: string, _eventId: string, _signal?: AbortSignal): Promise<MatrixEventLike> { throw new Error("not found"); }
 }
 
 function baseDeps(client: FakeClient, agent?: BridgeAgent, now = 1_000): BridgeDependencies {
@@ -64,8 +64,17 @@ describe("MatrixBridge", () => {
     await bridge.start();
     expect(registered.map((tool) => tool.name)).toEqual([MATRIX_LIST_ROOM_MEMBERS, MATRIX_SEND_ROOM_MESSAGE]);
     const send = registered.find((tool) => tool.name === MATRIX_SEND_ROOM_MESSAGE) as any;
+    const list = registered.find((tool) => tool.name === MATRIX_LIST_ROOM_MEMBERS) as any;
+    await expect(send.execute({ body: "before sync" }, { signal: new AbortController().signal })).rejects.toThrow("not ready");
+    await expect(list.execute({}, { signal: new AbortController().signal })).rejects.toThrow("not ready");
+    client.emit("sync", "PREPARED");
     await send.execute({ body: "hello from Web" }, { signal: new AbortController().signal });
     expect(client.sent).toEqual([{ roomId: "!allowed:example", content: { msgtype: "m.text", body: "hello from Web" } }]);
+    client.emit("sync", "ERROR");
+    expect(bridge.readiness.state).toBe("failed");
+    await expect(send.execute({ body: "after sync error" }, { signal: new AbortController().signal })).rejects.toThrow("not ready");
+    await expect(list.execute({}, { signal: new AbortController().signal })).rejects.toThrow("not ready");
+    expect(client.sent).toHaveLength(1);
     // The bot-authored tool event is explicitly ignored by Matrix capture, so
     // a Web/CLI turn cannot accidentally become a Matrix-triggered turn.
     client.emit("Room.timeline", matrixEvent("$tool-message", "hello from Web", { sender: "@bot:example", content: { msgtype: "m.text", body: "hello from Web" } }), {}, false, false, { timeline: "live" });
@@ -223,6 +232,71 @@ describe("MatrixBridge", () => {
     expect(longPrompt).toContain('event_id="$new"');
     expect(longPrompt).toContain('event_id="$trigger"');
     await bridgeLong.stop();
+  });
+
+  it("bounds the rendered context contribution when identities are adversarially long", async () => {
+    const client = new FakeClient();
+    const prompts: UserMessage[] = [];
+    const agent: BridgeAgent = {
+      id: "session" as never,
+      followup(message) {
+        prompts.push(message);
+        bridge.onInboxClaimed({ agent, message, turn: 32 });
+        bridge.onSessionEvent({ id: "session" }, { type: "assistant/message", data: { turn: 32, message: { role: "assistant", content: [{ type: "text", text: "bounded" }] } } });
+        bridge.onSessionEvent({ id: "session" }, { type: "turn/end", data: { turn: 32, reason: { kind: "completed" } } });
+      },
+      whenIdle: async () => undefined
+    };
+    const bridge = new MatrixBridge(baseDeps(client, agent));
+    await bridge.start();
+    client.emit("sync", "PREPARED");
+    for (let index = 0; index < 40; index += 1) {
+      const eventId = `$context-${String(index).padStart(2, "0")}-${"x".repeat(600)}`;
+      client.emit("Room.timeline", matrixEvent(eventId, `context ${index}`, { content: { msgtype: "m.text", body: `context ${index}` } }), {}, false, false, { timeline: "live" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(bridge.contextBuffer.length).toBeLessThan(40);
+    const triggerId = `$trigger-${"y".repeat(600)}`;
+    client.emit("Room.timeline", matrixEvent(triggerId, "@bot:example summarize", { content: { msgtype: "m.text", body: "@bot:example summarize", "m.mentions": { user_ids: ["@bot:example"] } } }), {}, false, false, { timeline: "live" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const prompt = String(prompts[0]?.content[0]?.type === "text" ? prompts[0]?.content[0]?.text : "");
+    expect(prompt.length).toBeLessThanOrEqual(MAX_PROMPT_CHARS);
+    expect(prompt).toContain(`event_id="${triggerId.slice(0, MAX_PROVENANCE_CHARS)}"`);
+    expect(prompt).toContain('trigger=true');
+    expect(renderMatrixContextPrompt(bridge.contextBuffer, "")).toContain("room context");
+    expect(bridge.contextBuffer).toHaveLength(0);
+    await bridge.stop();
+  });
+
+  it("gates delayed reply classification after stop without waiting forever", async () => {
+    const client = new FakeClient();
+    let release!: (event: MatrixEventLike) => void;
+    const delayed = new Promise<MatrixEventLike>((resolve) => { release = resolve; });
+    let aborted = false;
+    client.getRoom = () => undefined;
+    client.fetchRoomEvent = async (_roomId, _eventId, signal) => {
+      signal?.addEventListener("abort", () => { aborted = true; }, { once: true });
+      return delayed;
+    };
+    const prompts: UserMessage[] = [];
+    const agent: BridgeAgent = {
+      id: "session" as never,
+      followup: (message) => { prompts.push(message); },
+      whenIdle: async () => undefined
+    };
+    const bridge = new MatrixBridge(baseDeps(client, agent));
+    await bridge.start();
+    client.emit("sync", "PREPARED");
+    client.emit("Room.timeline", matrixEvent("$delayed-stop", "reply", { content: { msgtype: "m.text", body: "reply", "m.relates_to": { "m.in_reply_to": { event_id: "$not-yet" } } } }), {}, false, false, { timeline: "live" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await bridge.stop();
+    expect(aborted).toBe(true);
+    expect(bridge.readiness.state).toBe("disabled");
+    expect(bridge.contextBuffer).toHaveLength(0);
+    release(matrixEvent("$not-yet", "old bot message", { sender: "@bot:example", content: { msgtype: "m.text", body: "old bot message" } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(prompts).toHaveLength(0);
+    expect(client.sent).toHaveLength(0);
   });
 
   it("suppresses an exact NO_REPLY and anchors each later answer to its trigger", async () => {

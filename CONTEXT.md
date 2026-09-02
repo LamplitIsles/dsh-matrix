@@ -49,7 +49,7 @@ The triggering Matrix event ID carried in the outbound `m.relates_to.m.in_reply_
 _Avoid_: Thread, quote fallback
 
 **Fixed-room Matrix tools**:
-The two native tools scoped to the locked active Companion: `matrix_list_room_members` and `matrix_send_room_message`. Neither accepts a room ID; both derive the one restart-scoped allowed room and disappear when the bridge stops or releases ownership.
+The two native tools scoped to the locked active Companion: `matrix_list_room_members` and `matrix_send_room_message`. Neither accepts a room ID; both derive the one restart-scoped allowed room, require a usable PREPARED bridge, and disappear when the bridge stops or releases ownership.
 _Avoid_: Matrix-wide tools, room selector
 
 **Joined-user roster**:
