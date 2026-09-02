@@ -77,20 +77,24 @@ Formatted HTML is never rendered or treated as prompt content.
 
 Every eligible external text message is captured in timeline order in a
 bounded, in-memory room context buffer. In mention-only mode an ordinary
-message adds context but does not open a turn. A mention or a verified reply to
-the Matrix identity drains the FIFO buffer atomically (the triggering message
+message adds context but does not open a turn. A mention, verified reply, or
+literal occurrence of the identity's current non-empty room display label (for
+example, `汐`) drains the FIFO buffer atomically (the triggering message
 included) into one Matrix-initiated turn; **Respond to all messages** makes each
-eligible message a trigger. Messages that arrive while a turn is pending stay
-in the next buffer and cannot be folded into the already-running prompt.
+eligible message a trigger. The label is read from local room member state and
+matched as a literal substring, with no profile lookup. Messages that arrive
+while a turn is pending stay in the next buffer.
 
-The resulting user message contains a deterministic plugin-authored envelope.
-It labels every record with the sender's stable Matrix user ID and event ID,
-identifies the reply-triggering event, and warns that room records are
-untrusted data rather than instructions. The same bounded room/sender/event
-records ride in plugin provenance for Host-side attribution; provider
-serialization is not relied on to expose that metadata to the model. Buffered
-room text is part of the durable DSH conversation history and model input, so
-the selected allowed room is a deliberate privacy boundary.
+The resulting ordinary DSH user message contains a deterministic
+plugin-authored envelope. Each record uses the sender's current room display
+label as its primary speaker label alongside the stable Matrix user ID and
+event ID; missing labels fall back to the ID. The envelope identifies the
+trigger and marks room records as untrusted data. Routing metadata stays
+bridge-owned rather than plugin-sourcing the composite, so an enabled Hindsight
+companion-memory plugin applies its normal user-turn recall and retention to
+the Matrix transcript and final answer; Hindsight's plugin-origin recall
+injection remains outside that path. The transcript is durable DSH/model input,
+so the selected room is a deliberate privacy boundary.
 
 Admitted prompts are serialized because they share one locked Agent. The bridge
 waits for the exact Matrix-initiated turn and sends only its final non-empty
@@ -103,10 +107,12 @@ The locked Companion also receives exactly two native tools in its scoped
 conversation:
 
 - **`matrix_list_room_members`** takes no arguments and returns a bounded (at
-  most 128 IDs and 16,000 rendered characters), sorted list of current joined
-  Matrix user IDs for the configured room only.
-  It intentionally omits display names, avatars, presence, power levels,
-  membership history, and every other room.
+  most 128 entries and 16,000 rendered characters), sorted list of
+  `{ userId, displayName }` entries for current joined members of the
+  configured room only. `displayName` is the current local room label (which
+  the Matrix SDK may disambiguate) and falls back to `userId` when unavailable.
+  It intentionally omits avatars, presence, power levels, membership history,
+  and every other room.
 - **`matrix_send_room_message`** takes one non-empty plain-text `body` of at
   most 16,000 characters and sends one ordinary `m.text` event to the
   configured room. It has no room argument and cannot impersonate, reply, or
@@ -142,8 +148,8 @@ invites/auto-join, streaming output or `m.replace` edits, multiple rooms or
 accounts, per-room/session selection, live switching, automatic session
 creation, password/SSO login, durable sync tokens, durable deduplication,
 transactional outbox, or exactly-once delivery guarantees. The fixed-room
-tools do not provide room selection, display-name/profile lookup, presence,
-power levels, membership history, invitations, moderation, media/HTML,
+tools do not provide room selection, profile lookup, presence, power levels,
+membership history, invitations, moderation, media/HTML,
 threads, reactions, or any other Matrix account capability.
 
 ## Operator verification
@@ -153,15 +159,15 @@ threads, reactions, or any other Matrix account capability.
    and account values, write the Element token, and save.
 3. Restart DSH again and confirm the card reports **bound** (or the expected
    bounded missing/unbound state).
-4. In the allowed room, send two ordinary messages followed by a mention or
-   reply. Confirm the answer cites the bounded context and is a Matrix reply to
-   the triggering event. Send a notice, an edit, a thread event, and a message
-   in another room; confirm none enters context or produces a reply.
+4. In the allowed room, send two ordinary messages followed by a mention,
+   verified reply, or the Matrix identity's current room display label. Confirm
+   the bounded-context answer replies to that event. Send a notice, edit,
+   thread, and another-room message; confirm none enters context or replies.
 5. Ask the companion to answer exactly `NO_REPLY` and confirm that the turn is
    visible in DSH but no room message is sent. Toggle **Respond to all**, save,
    restart, and verify an ordinary text message triggers.
-6. Ask the locked Companion to call `matrix_list_room_members`; verify that it
-   sees only bounded joined user IDs from the configured room. Ask it to call
+6. Ask the locked Companion to call `matrix_list_room_members`; verify only
+   bounded `{ userId, displayName }` entries from the configured room. Ask it to call
    `matrix_send_room_message` with a short greeting and confirm the single
    plain-text room message, DSH approval prompt, and absence of a second bridge
    turn. Try an empty/overlong body and an unavailable connection to confirm

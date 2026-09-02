@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   createMatrixToolDefinitions,
-  listJoinedMatrixUserIds,
+  listJoinedMatrixMembers,
   MATRIX_LIST_ROOM_MEMBERS,
   MATRIX_SEND_ROOM_MESSAGE
 } from "../src/matrix-tools.js";
-import { MAX_MATRIX_TOOL_BODY_CHARS, MAX_ROOM_MEMBERS } from "../src/constants.js";
+import { MAX_MATRIX_TOOL_BODY_CHARS, MAX_PROMPT_CHARS, MAX_ROOM_MEMBERS } from "../src/constants.js";
 import type { MatrixClientLike } from "../src/matrix-protocol.js";
 
 function execution(signal = new AbortController().signal): any {
@@ -17,10 +17,10 @@ function definitions(client: MatrixClientLike, roomId = "!allowed:example") {
 }
 
 describe("fixed-room Matrix tools", () => {
-  it("lists only a bounded, deterministic current joined-user-ID roster", async () => {
+  it("lists only a bounded, deterministic current joined roster with display labels", async () => {
     const members = Array.from({ length: MAX_ROOM_MEMBERS + 20 }, (_, index) => ({
       userId: `@member-${String(MAX_ROOM_MEMBERS + 20 - index).padStart(3, "0")}:example`,
-      name: "Private display name",
+      name: `Member ${String(MAX_ROOM_MEMBERS + 20 - index).padStart(3, "0")}`,
       presence: "online",
       powerLevel: 100,
       membership: "join"
@@ -32,24 +32,59 @@ describe("fixed-room Matrix tools", () => {
         return { getJoinedMembers: () => members };
       }
     };
-    const result = await definitions(client)[0]!.execute({}, execution()) as { userIds: string[] };
+    const result = await definitions(client)[0]!.execute({}, execution()) as { members: Array<{ userId: string; displayName: string }> };
     expect(requestedRoom).toBe("!allowed:example");
-    expect(result.userIds).toHaveLength(MAX_ROOM_MEMBERS);
-    expect(result.userIds[0]).toBe("@member-001:example");
-    expect(result.userIds.every((id: string) => id.startsWith("@member-") && !id.includes("Private"))).toBe(true);
-    expect(result).not.toHaveProperty("displayNames");
+    expect(result.members).toHaveLength(MAX_ROOM_MEMBERS);
+    expect(result.members[0]).toEqual({ userId: "@member-001:example", displayName: "Member 001" });
+    expect(result.members.every((member) => member.userId.startsWith("@member-") && member.displayName.startsWith("Member "))).toBe(true);
+    expect(result).not.toHaveProperty("userIds");
   });
 
-  it("uses joined membership from the current-room fallback and never another room", () => {
+  it("uses joined membership from the current-room fallback and falls back to IDs", () => {
     const client: MatrixClientLike = {
       getRoom: () => ({
         getMembers: () => [
-          { userId: "@joined:example", membership: "join" },
+          { userId: "@joined:example", name: "Joined", membership: "join" },
+          { userId: "@blank:example", name: "   ", membership: "join" },
           { userId: "@left:example", membership: "leave" }
         ]
       })
     };
-    expect(listJoinedMatrixUserIds(client, "!fixed:example")).toEqual(["@joined:example"]);
+    expect(listJoinedMatrixMembers(client, "!fixed:example")).toEqual([
+      { userId: "@blank:example", displayName: "@blank:example" },
+      { userId: "@joined:example", displayName: "Joined" }
+    ]);
+  });
+
+  it("keeps SDK-provided disambiguated labels and deduplicates user IDs", () => {
+    const client: MatrixClientLike = {
+      getRoom: () => ({
+        getJoinedMembers: () => [
+          { userId: "@same:example", name: "Same (@same:example)", membership: "join" },
+          { userId: "@same:example", name: "stale", membership: "join" },
+          { userId: "@other:example", displayName: "Same (@other:example)", membership: "join" }
+        ]
+      })
+    };
+    expect(listJoinedMatrixMembers(client, "!fixed:example")).toEqual([
+      { userId: "@other:example", displayName: "Same (@other:example)" },
+      { userId: "@same:example", displayName: "Same (@same:example)" }
+    ]);
+  });
+
+  it("bounds the rendered roster contribution", async () => {
+    const client: MatrixClientLike = {
+      getRoom: () => ({
+        getJoinedMembers: () => Array.from({ length: MAX_ROOM_MEMBERS }, (_, index) => ({
+          userId: `@member-${index}:example`,
+          name: "x".repeat(600),
+          membership: "join"
+        }))
+      })
+    };
+    const result = await definitions(client)[0]!.execute({}, execution()) as { members: Array<{ userId: string; displayName: string }> };
+    const rendered = result.members.map((member) => `${member.displayName} (${member.userId})`).join("\n");
+    expect(rendered.length).toBeLessThanOrEqual(MAX_PROMPT_CHARS);
   });
 
   it("sends one ordinary fixed-room m.text event with no relation", async () => {

@@ -23,7 +23,6 @@ import {
   type MatrixClientLike,
   type MatrixContextRecord,
   type MatrixEventLike,
-  type MatrixProvenance,
   type MatrixTimelineData,
   renderMatrixContextPrompt
 } from "./matrix-protocol.js";
@@ -657,6 +656,7 @@ export class MatrixBridge {
       eventId: message.eventId.slice(0, MAX_PROVENANCE_CHARS),
       roomId: message.roomId.slice(0, MAX_PROVENANCE_CHARS),
       sender: message.sender.slice(0, MAX_PROVENANCE_CHARS),
+      displayName: message.displayName.slice(0, MAX_PROVENANCE_CHARS),
       text: message.text
     };
     this.contextBufferValue.push(record);
@@ -705,14 +705,12 @@ export class MatrixBridge {
       await this.sendUnboundNotice(message);
       return;
     }
-    const source: MatrixProvenance = {
-      ...message.source,
-      triggerEventId: message.eventId.slice(0, MAX_PROVENANCE_CHARS),
-      context: transcript.map((record) => ({ ...record }))
-    };
     const userMessage = createUserMessage({
       content: [{ type: "text", text: renderMatrixContextPrompt(transcript, message.eventId.slice(0, MAX_PROVENANCE_CHARS)) }],
-      source: source as unknown as UserMessage["source"]
+      // Matrix context represents external human room input. Keep routing
+      // identity in the bridge-owned queued trigger rather than marking the
+      // composite as plugin data, so normal user-turn memory hooks apply.
+      source: { kind: "user" }
     });
     const wait = this.waitForTurn(String(userMessage.id), message.eventId);
     try {

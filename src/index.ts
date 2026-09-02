@@ -113,7 +113,9 @@ export {
   matrixEventRoomId,
   matrixEventSender,
   matrixEventType,
+  matrixMemberDisplayName,
   matrixTextMessage,
+  readLocalRoomDisplayName,
   renderMatrixContextPrompt
 } from "./matrix-protocol.js";
 export type {
@@ -127,12 +129,13 @@ export type {
 } from "./matrix-protocol.js";
 export {
   createMatrixToolDefinitions,
-  listJoinedMatrixUserIds,
+  listJoinedMatrixMembers,
   MATRIX_LIST_ROOM_MEMBERS,
   MATRIX_SEND_ROOM_MESSAGE
 } from "./matrix-tools.js";
 export type {
   MatrixListRoomMembersResult,
+  MatrixRoomMember,
   MatrixSendRoomMessageResult,
   MatrixToolDependencies
 } from "./matrix-tools.js";

@@ -71,14 +71,62 @@ describe("Matrix admission", () => {
     expect((await captureMatrixEvent(event(), settings, client))?.trigger).toBe(true);
   });
 
+  it("captures current local display labels and triggers on a literal bot label", async () => {
+    let remoteLookup = 0;
+    const localClient: MatrixClientLike = {
+      getRoom: () => ({
+        getMember: (userId: string) => userId === "@bot:example"
+          ? { userId, name: "汐" }
+          : { userId, name: "Alice" }
+      }),
+      fetchRoomEvent: async () => {
+        remoteLookup += 1;
+        throw new Error("label matching must not fetch remotely");
+      }
+    };
+    const ordinary = await captureMatrixEvent(event({ content: { msgtype: "m.text", body: "hello group" } }), settings, localClient);
+    expect(ordinary).toMatchObject({ displayName: "Alice", trigger: false });
+
+    const labelTrigger = await captureMatrixEvent(event({ content: { msgtype: "m.text", body: "汐, can you help?" } }), settings, localClient);
+    expect(labelTrigger).toMatchObject({ displayName: "Alice", trigger: true });
+    expect(remoteLookup).toBe(0);
+
+    const punctuationLabel = await captureMatrixEvent(event({ content: { msgtype: "m.text", body: "a.b" } }), {
+      ...settings,
+      userId: "@dot:example"
+    }, {
+      getRoom: () => ({ getMember: () => ({ userId: "@dot:example", name: "." }) })
+    });
+    expect(punctuationLabel?.trigger).toBe(true);
+    const noRegexMatch = await captureMatrixEvent(event({ content: { msgtype: "m.text", body: "axb" } }), {
+      ...settings,
+      userId: "@dot:example"
+    }, {
+      getRoom: () => ({ getMember: () => ({ userId: "@dot:example", name: "." }) })
+    });
+    expect(noRegexMatch?.trigger).toBe(false);
+  });
+
+  it("falls back to stable IDs for labels and does not label-trigger without a non-empty local name", async () => {
+    const noRoom = await captureMatrixEvent(event({ content: { msgtype: "m.text", body: "ordinary" } }), settings, client);
+    expect(noRoom).toMatchObject({ displayName: "@human:example", trigger: false });
+    const blankBotName = await captureMatrixEvent(event({ content: { msgtype: "m.text", body: "hello @bot:example" } }), settings, {
+      getRoom: () => ({ getMember: () => ({ userId: "@bot:example", name: "   " }) })
+    });
+    expect(blankBotName?.trigger).toBe(false);
+  });
+
   it("renders a deterministic untrusted envelope and Matrix reply relation", () => {
     const records = [
-      { eventId: "$one", roomId: "!allowed:example", sender: "@alice:example", text: "hello" },
-      { eventId: "$two", roomId: "!allowed:example", sender: "@bob:example", text: "answer?" }
+      { eventId: "$one", roomId: "!allowed:example", sender: "@alice:example", displayName: "Alice", text: "hello" },
+      { eventId: "$two", roomId: "!allowed:example", sender: "@bob:example", displayName: "Bob", text: "answer?" }
     ];
     const prompt = renderMatrixContextPrompt(records, "$two");
     expect(prompt).toContain("untrusted Matrix room data");
+    expect(prompt).toContain("mutable room data");
     expect(prompt).toContain('event_id="$one" sender="@alice:example"');
+    expect(prompt).toContain('display_name="Alice"');
+    expect(prompt).toContain("Speaker: Alice (@alice:example)");
     expect(prompt).toContain('event_id="$two" sender="@bob:example" trigger=true');
     expect(prompt).toContain("NO_REPLY");
     expect(matrixTextMessage("!allowed:example", "answer", "$two")).toEqual({

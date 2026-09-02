@@ -5,7 +5,12 @@ import {
   MAX_ROOM_MEMBER_ID_CHARS,
   MAX_ROOM_MEMBERS
 } from "./constants.js";
-import { matrixTextMessage, type MatrixClientLike, type MatrixRoomLike } from "./matrix-protocol.js";
+import {
+  matrixMemberDisplayName,
+  matrixTextMessage,
+  type MatrixClientLike,
+  type MatrixRoomLike
+} from "./matrix-protocol.js";
 
 export const MATRIX_LIST_ROOM_MEMBERS = "matrix_list_room_members" as const;
 export const MATRIX_SEND_ROOM_MESSAGE = "matrix_send_room_message" as const;
@@ -19,8 +24,13 @@ export interface MatrixToolDependencies {
   isReady: () => boolean;
 }
 
+export interface MatrixRoomMember {
+  userId: string;
+  displayName: string;
+}
+
 export interface MatrixListRoomMembersResult {
-  userIds: string[];
+  members: MatrixRoomMember[];
 }
 
 export interface MatrixSendRoomMessageResult {
@@ -80,7 +90,13 @@ function currentJoinedMembers(room: MatrixRoomLike): readonly unknown[] {
   if (typeof room.getJoinedMembers === "function") {
     try {
       const members = room.getJoinedMembers();
-      if (Array.isArray(members)) return members;
+      if (Array.isArray(members)) {
+        return members.filter((member) => {
+          if (!member || typeof member !== "object") return false;
+          const membership = (member as { membership?: unknown }).membership;
+          return membership === undefined || membership === "join";
+        });
+      }
     } catch {
       // Fall through to the current-members accessor when available.
     }
@@ -102,8 +118,8 @@ function currentJoinedMembers(room: MatrixRoomLike): readonly unknown[] {
   throw unavailableError();
 }
 
-/** Read only current joined Matrix user IDs, with deterministic and finite output. */
-export function listJoinedMatrixUserIds(client: MatrixClientLike | undefined, roomId: string): string[] {
+/** Read only current joined Matrix members, with deterministic and finite output. */
+export function listJoinedMatrixMembers(client: MatrixClientLike | undefined, roomId: string): MatrixRoomMember[] {
   if (!client || !roomId.trim()) throw unavailableError();
   let room: MatrixRoomLike | null | undefined;
   try {
@@ -112,22 +128,29 @@ export function listJoinedMatrixUserIds(client: MatrixClientLike | undefined, ro
     throw unavailableError();
   }
   if (!room) throw unavailableError();
-  const ids = new Set<string>();
+  const members = new Map<string, MatrixRoomMember>();
   for (const member of currentJoinedMembers(room)) {
     const id = memberUserId(member);
     if (!id) continue;
-    ids.add(id.slice(0, MAX_ROOM_MEMBER_ID_CHARS));
+    const userId = id.slice(0, MAX_ROOM_MEMBER_ID_CHARS);
+    const candidate: MatrixRoomMember = {
+      userId,
+      displayName: matrixMemberDisplayName(member, id)?.slice(0, MAX_ROOM_MEMBER_ID_CHARS) ?? userId
+    };
+    const existing = members.get(userId);
+    if (!existing || candidate.displayName < existing.displayName) members.set(userId, candidate);
   }
-  const sorted = [...ids]
-    .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+  const sorted = [...members.values()]
+    .sort((left, right) => left.userId < right.userId ? -1 : left.userId > right.userId ? 1 : left.displayName < right.displayName ? -1 : left.displayName > right.displayName ? 1 : 0)
     .slice(0, MAX_ROOM_MEMBERS);
-  const bounded: string[] = [];
+  const bounded: MatrixRoomMember[] = [];
   let characters = 0;
-  for (const id of sorted) {
+  for (const member of sorted) {
+    const line = `${member.displayName} (${member.userId})`;
     const separator = bounded.length === 0 ? 0 : 1;
-    if (characters + separator + id.length > MAX_PROMPT_CHARS) break;
-    bounded.push(id);
-    characters += separator + id.length;
+    if (characters + separator + line.length > MAX_PROMPT_CHARS) break;
+    bounded.push(member);
+    characters += separator + line.length;
   }
   return bounded;
 }
@@ -148,24 +171,37 @@ function validMessageBody(body: unknown): body is string {
 export function createMatrixToolDefinitions(deps: MatrixToolDependencies): readonly ToolDefinition[] {
   const listTool = defineTool({
     name: MATRIX_LIST_ROOM_MEMBERS,
-    description: "List the current joined Matrix user IDs in the configured room.",
+    description: "List the current joined Matrix room members with their display names and stable user IDs.",
     parameters: {},
     output: {
       schema: {
         type: "object",
         additionalProperties: false,
         properties: {
-          userIds: { type: "array", items: { type: "string" }, required: true }
+          members: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                userId: { type: "string", required: true },
+                displayName: { type: "string", required: true }
+              }
+            },
+            required: true
+          }
         }
       },
-      render: (_args, value) => toolText(value.userIds.length > 0 ? value.userIds.join("\n") : "No joined Matrix users found.")
+      render: (_args, value) => toolText(value.members.length > 0
+        ? value.members.map((member) => `${member.displayName} (${member.userId})`).join("\n")
+        : "No joined Matrix users found.")
     },
     async execute(_args, exec): Promise<MatrixListRoomMembersResult> {
       const signal = toolSignal(exec);
       ensureNotAborted(signal);
       ensureReady(deps);
       try {
-        const value = { userIds: listJoinedMatrixUserIds(deps.getClient(), deps.roomId) };
+        const value = { members: listJoinedMatrixMembers(deps.getClient(), deps.roomId) };
         ensureNotAborted(signal);
         ensureReady(deps);
         return value;

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { UserMessage } from "@deepseek-ai/dsh-llm";
 import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 import { MatrixBridge, bridgeRpcHandler, finalAssistantTextForTurn, type BridgeAgent, type BridgeDependencies } from "../src/bridge.js";
-import { renderMatrixContextPrompt, type MatrixEventLike } from "../src/matrix-protocol.js";
+import { renderMatrixContextPrompt, type MatrixEventLike, type MatrixRoomLike } from "../src/matrix-protocol.js";
 import { MAX_PROVENANCE_CHARS, MAX_PROMPT_CHARS, RPC_ENDPOINT } from "../src/constants.js";
 import { MATRIX_LIST_ROOM_MEMBERS, MATRIX_SEND_ROOM_MESSAGE } from "../src/matrix-tools.js";
 
@@ -13,7 +13,7 @@ class FakeClient extends EventEmitter {
   startClient() {}
   async stopClient() { this.stopped = true; }
   async sendMessage(roomId: string, content: Record<string, unknown>) { this.sent.push({ roomId, content }); }
-  getRoom() { return undefined; }
+  getRoom(): MatrixRoomLike | undefined { return undefined; }
   async fetchRoomEvent(_roomId: string, _eventId: string, _signal?: AbortSignal): Promise<MatrixEventLike> { throw new Error("not found"); }
 }
 
@@ -131,6 +131,11 @@ describe("MatrixBridge", () => {
 
   it("buffers ordinary room text and drains it into an attributed deterministic prompt", async () => {
     const client = new FakeClient();
+    client.getRoom = () => ({
+      getMember: (userId: string) => userId === "@bot:example"
+        ? { userId, name: "汐" }
+        : { userId, name: "Alice" }
+    });
     const prompts: UserMessage[] = [];
     let turn = 20;
     const agent: BridgeAgent = {
@@ -150,7 +155,7 @@ describe("MatrixBridge", () => {
     client.emit("Room.timeline", matrixEvent("$ordinary", "ordinary context", { content: { msgtype: "m.text", body: "ordinary context" } }), {}, false, false, { timeline: "live" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(prompts).toHaveLength(0);
-    expect(bridge.contextBuffer).toMatchObject([{ eventId: "$ordinary", sender: "@human:example", text: "ordinary context" }]);
+    expect(bridge.contextBuffer).toMatchObject([{ eventId: "$ordinary", sender: "@human:example", displayName: "Alice", text: "ordinary context" }]);
 
     client.emit("Room.timeline", matrixEvent("$trigger", "@bot:example answer this"), {}, false, false, { timeline: "live" });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -158,10 +163,11 @@ describe("MatrixBridge", () => {
     const prompt = String(prompts[0]?.content[0]?.type === "text" ? prompts[0]?.content[0]?.text : "");
     expect(prompt).toContain("untrusted Matrix room data");
     expect(prompt).toContain('event_id="$ordinary" sender="@human:example"');
+    expect(prompt).toContain('display_name="Alice"');
+    expect(prompt).toContain("Speaker: Alice (@human:example)");
     expect(prompt).toContain('event_id="$trigger" sender="@human:example" trigger=true');
     expect(prompt).toContain("NO_REPLY");
-    expect(prompts[0]?.source).toMatchObject({ plugin: "dsh-matrix", triggerEventId: "$trigger" });
-    expect((prompts[0]?.source as { context?: unknown[] }).context).toHaveLength(2);
+    expect(prompts[0]?.source).toEqual({ kind: "user" });
     expect(bridge.contextBuffer).toHaveLength(0);
     expect(client.sent[0]?.content["m.relates_to"]).toEqual({ "m.in_reply_to": { event_id: "$trigger" } });
     await bridge.stop();
