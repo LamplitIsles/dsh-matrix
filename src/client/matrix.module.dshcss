@@ -1,0 +1,112 @@
+.settingsCard {
+  --matrix-card-gap: 12px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-3);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  padding: 16px;
+  display: grid;
+  gap: var(--matrix-card-gap);
+}
+
+.settingsGrid {
+  display: grid;
+  gap: var(--matrix-card-gap);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.field {
+  display: grid;
+  gap: 4px;
+}
+
+.label {
+  font-weight: 600;
+}
+
+.hint,
+.status {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+.input,
+.select {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-3);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 5px;
+  min-height: 2rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.input:focus-visible,
+.select:focus-visible,
+.checkbox:focus-visible,
+.save:focus-visible,
+.discard:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 2px;
+}
+
+.invalid {
+  color: var(--dsw-alias-label-error);
+}
+
+.inputInvalid {
+  border-color: var(--dsw-alias-label-error);
+}
+
+.toggle {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.checkbox {
+  accent-color: var(--dsw-alias-brand-primary);
+}
+
+.credentialState {
+  color: var(--dsw-alias-state-success-primary);
+  font-size: 0.875rem;
+}
+
+.credentialUnset {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 0.875rem;
+}
+
+.footer {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.save,
+.discard {
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 5px;
+  padding: 0.35rem 0.75rem;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.save {
+  background: var(--dsw-alias-label-primary);
+}
+
+.runtime {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  padding-top: var(--matrix-card-gap);
+}
+
+.runtimeState {
+  font-weight: 600;
+}

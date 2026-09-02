@@ -1,0 +1,22 @@
+declare const classes: {
+  readonly settingsCard: string;
+  readonly settingsGrid: string;
+  readonly field: string;
+  readonly label: string;
+  readonly hint: string;
+  readonly status: string;
+  readonly input: string;
+  readonly select: string;
+  readonly invalid: string;
+  readonly inputInvalid: string;
+  readonly toggle: string;
+  readonly checkbox: string;
+  readonly credentialState: string;
+  readonly credentialUnset: string;
+  readonly footer: string;
+  readonly save: string;
+  readonly discard: string;
+  readonly runtime: string;
+  readonly runtimeState: string;
+};
+export default classes;
