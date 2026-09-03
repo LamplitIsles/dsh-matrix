@@ -99,11 +99,11 @@ so the selected room is a deliberate privacy boundary.
 Admitted prompts are serialized because they share one locked Agent. A turn's
 final Assistant text always remains in DSH: it never itself sends a Matrix
 event. The Companion must explicitly call the Matrix send tool to deliver a
-message. For a Matrix-initiated turn, it may select any event ID in that
-turn's injected room context as an optional reply anchor; messages that arrive
-later stay in the next buffer and cannot be selected. Stable Matrix-use policy
-is installed once as an active-Companion-scoped system prompt; each turn
-injects only the changing room data and trigger identity.
+message. Its optional reply target may be any event that Matrix verifies in
+the configured room's server history, including one returned by the recent
+message tool. Stable Matrix-use policy is installed once as an
+active-Companion-scoped system prompt; each turn injects only the changing room
+data and trigger identity.
 
 The locked Companion also receives exactly three native tools in its scoped
 conversation:
@@ -124,8 +124,8 @@ conversation:
   untrusted room data. Calling it does not create a Companion turn.
 - **`matrix_send_message`** takes one non-empty plain-text `body` of at most
   16,000 characters, optional `replyToEventId`, and optional `mentions` array.
-  `replyToEventId` must exactly equal an event ID in the context of the current
-  Matrix-initiated turn; omitting it sends an ordinary room message. Each mention must
+  `replyToEventId` must exactly equal an event Matrix can retrieve from the
+  configured room's server history; omitting it sends an ordinary room message. Each mention must
   exactly equal one unique current display label in the bounded roster returned
   by `matrix_list_members`; labels are case-sensitive and are not
   trimmed, normalized, guessed, or looked up remotely. The tool resolves those
@@ -134,7 +134,7 @@ conversation:
   one ID; omitting `mentions` and passing `[]` are identical no-mention calls.
   The caller's body is sent unchanged: the tool does not add visible `@label`
   text, accept Matrix IDs or `@room`, impersonate, create a thread, or reply
-  outside the current injected Matrix context.
+  to an event outside the configured room.
   If a label is stale, unknown, or ambiguous (including after a local roster
   change detected before send), the whole call is rejected before any event is
   sent. The bounded error includes the requested label and a JSON list of
@@ -146,8 +146,8 @@ conversation:
 
 These registrations and the Matrix policy section belong only to the
 startup-locked Companion and are removed when the bridge stops or ownership is
-released. A Web/CLI-initiated turn may use the send tool to greet the room, but
-cannot select a Matrix reply anchor; its final Assistant text stays in DSH.
+released. A Web/CLI-initiated turn may use the send tool to greet the room or
+reply to verified room history; its final Assistant text stays in DSH.
 
 If no eligible conversation existed when DSH started, the Matrix client stays
 connected but the bridge remains **unbound** until the next restart. It does
@@ -191,8 +191,8 @@ threads, reactions, or any other Matrix account capability.
 6. Ask the locked Companion to call `matrix_list_members`; verify only bounded
    `{ userId, displayName }` entries from the configured room. Call
    `matrix_send_message` with a short greeting and confirm the single
-   plain-text room message and DSH approval prompt. In a Matrix-triggered turn,
-   select one injected event ID as `replyToEventId`; it must become the Matrix
+   plain-text room message and DSH approval prompt. Select an event ID returned
+   by `matrix_read_recent_messages` as `replyToEventId`; it must become the Matrix
    reply relation. Then pass exact roster display labels in `mentions` and
    verify the visible body is unchanged while Matrix receives
    `m.mentions.user_ids`. Invalid anchors or labels must send nothing.

@@ -62,20 +62,18 @@ describe("MatrixBridge", () => {
     await bridge.stop();
   });
 
-  it("allows the Agent to explicitly reply to any injected context event", async () => {
+  it("allows the Agent to reply to verified room history from any turn", async () => {
     const client = new FakeClient();
+    client.fetchRoomEvent = async (_roomId, eventId) => matrixEvent(eventId, "earlier");
     const registered: ToolDefinition[] = [];
     const agent: BridgeAgent = { id: "session" as never, ctx: { tools: { register: (tool: ToolDefinition) => { registered.push(tool); return () => undefined; } } } as never, followup: async (message) => {
-      bridge.onInboxClaimed({ agent, message, turn: 1 });
+      void message;
       const send = registered.find((tool) => tool.name === MATRIX_SEND_MESSAGE)!;
       await send.execute({ body: "reply", replyToEventId: "$older" }, { signal: new AbortController().signal } as never);
-      bridge.onSessionEvent({ id: "session" }, { type: "turn/end", data: { turn: 1 } });
-      await expect(send.execute({ body: "web reply", replyToEventId: "$older" }, { signal: new AbortController().signal } as never)).rejects.toThrow("not available in the current Matrix context");
     }, whenIdle: async () => undefined };
     const bridge = new MatrixBridge(baseDeps(client, agent));
     await bridge.start();
     client.emit("sync", "PREPARED");
-    client.emit("Room.timeline", matrixEvent("$older", "earlier"), {}, false, false, { timeline: "live" });
     client.emit("Room.timeline", matrixEvent("$trigger", "@bot:example answer"), {}, false, false, { timeline: "live" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(client.sent).toEqual([{ roomId: "!allowed:example", content: { msgtype: "m.text", body: "reply", "m.relates_to": { "m.in_reply_to": { event_id: "$older" } } } }]);

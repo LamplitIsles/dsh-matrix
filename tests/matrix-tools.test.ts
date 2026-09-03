@@ -15,7 +15,7 @@ function execution(signal = new AbortController().signal): any {
 }
 
 function definitions(client: MatrixClientLike, roomId = "!allowed:example") {
-  return createMatrixToolDefinitions({ getClient: () => client, roomId, isReady: () => true, getReplyAnchorIds: () => [] });
+  return createMatrixToolDefinitions({ getClient: () => client, roomId, isReady: () => true });
 }
 
 describe("fixed-room Matrix tools", () => {
@@ -137,12 +137,22 @@ describe("fixed-room Matrix tools", () => {
     expect(requests).toEqual([null, "older"]);
   });
 
-  it("rejects a reply anchor that was not injected into the current Matrix turn", async () => {
+  it("allows replies to verified server-history events from any turn", async () => {
     const sent: Array<Record<string, unknown>> = [];
-    const client: MatrixClientLike = { sendMessage: async (_roomId, content) => { sent.push(content); } };
+    const client: MatrixClientLike = {
+      fetchRoomEvent: async (roomId, eventId) => {
+        if (roomId === "!allowed:example" && eventId === "$history") return {
+          getId: () => "$history",
+          getRoomId: () => "!allowed:example"
+        };
+        throw new Error("not found");
+      },
+      sendMessage: async (_roomId, content) => { sent.push(content); }
+    };
     const tool = definitions(client).find((candidate) => candidate.name === MATRIX_SEND_MESSAGE)!;
-    await expect(tool.execute({ body: "nope", replyToEventId: "$unknown" }, execution())).rejects.toThrow("not available in the current Matrix context");
-    expect(sent).toHaveLength(0);
+    await expect(tool.execute({ body: "reply", replyToEventId: "$history" }, execution())).resolves.toEqual({ sent: true });
+    await expect(tool.execute({ body: "nope", replyToEventId: "$unknown" }, execution())).rejects.toThrow("configured Matrix room history");
+    expect(sent).toEqual([{ msgtype: "m.text", body: "reply", "m.relates_to": { "m.in_reply_to": { event_id: "$history" } } }]);
   });
 
   it("resolves exact current display labels to intentional Matrix mentions", async () => {
