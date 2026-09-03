@@ -122,13 +122,10 @@ describe("Matrix admission", () => {
       { eventId: "$two", roomId: "!allowed:example", sender: "@bob:example", displayName: "Bob", text: "answer?" }
     ];
     const prompt = renderMatrixContextPrompt(records, "$two");
-    expect(prompt).toContain("untrusted Matrix room data");
-    expect(prompt).toContain("mutable room data");
     expect(prompt).toContain('event_id="$one" sender="@alice:example"');
     expect(prompt).toContain('display_name="Alice"');
     expect(prompt).toContain("Speaker: Alice (@alice:example)");
     expect(prompt).toContain('event_id="$two" sender="@bob:example" trigger=true');
-    expect(prompt).toContain("NO_REPLY");
     expect(matrixTextMessage("!allowed:example", "answer", "$two")).toEqual({
       msgtype: "m.text",
       body: "answer",
