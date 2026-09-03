@@ -13,6 +13,7 @@ export const inject = [
   "agents",
   "agentPresets",
   "tools",
+  "systemPrompt",
   "workspaceRegistry",
   "sessionController"
 ] as const;
@@ -78,8 +79,8 @@ export function apply(ctx: HostContext): void {
     }
   });
 
-  ctx.on("agent/inbox/claimed", (payload: unknown) => bridge.onInboxClaimed(payload as any));
-  ctx.on("session/event", (session: unknown, event: unknown) => bridge.onSessionEvent(session as any, event as any));
+  ctx.on("agent/inbox/claimed", (payload: unknown) => bridge.onInboxClaimed(payload as never));
+  ctx.on("session/event", (session: unknown, event: unknown) => bridge.onSessionEvent(session as never, event as never));
 
   ctx.effect(() => {
     const disposeRpc = ctx.connection.rpc.handle(RPC_CHANNEL, bridgeRpcHandler(bridge));
@@ -93,9 +94,7 @@ export function apply(ctx: HostContext): void {
 
 export {
   MatrixBridge,
-  assistantText,
-  bridgeRpcHandler,
-  finalAssistantTextForTurn
+  bridgeRpcHandler
 } from "./bridge.js";
 export type {
   BridgeAgent,
@@ -130,13 +129,16 @@ export type {
 export {
   createMatrixToolDefinitions,
   listJoinedMatrixMembers,
-  MATRIX_LIST_ROOM_MEMBERS,
-  MATRIX_SEND_ROOM_MESSAGE
+  readRecentMatrixMessages,
+  MATRIX_LIST_MEMBERS,
+  MATRIX_READ_RECENT_MESSAGES,
+  MATRIX_SEND_MESSAGE
 } from "./matrix-tools.js";
 export type {
-  MatrixListRoomMembersResult,
+  MatrixListMembersResult,
+  MatrixReadRecentMessagesResult,
   MatrixRoomMember,
-  MatrixSendRoomMessageResult,
+  MatrixSendMessageResult,
   MatrixToolDependencies
 } from "./matrix-tools.js";
 export {

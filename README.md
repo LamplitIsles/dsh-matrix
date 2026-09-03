@@ -96,33 +96,45 @@ the Matrix transcript and final answer; Hindsight's plugin-origin recall
 injection remains outside that path. The transcript is durable DSH/model input,
 so the selected room is a deliberate privacy boundary.
 
-Admitted prompts are serialized because they share one locked Agent. The bridge
-waits for the exact Matrix-initiated turn and sends only its final non-empty
-assistant text as one `m.text` reply related to the triggering event. Tool
-output, intermediate assistant messages, and activity initiated by Web or CLI
-are not relayed. If the final text, after trimming, is exactly `NO_REPLY`, it is
-retained in DSH but no Matrix message is sent.
+Admitted prompts are serialized because they share one locked Agent. A turn's
+final Assistant text always remains in DSH: it never itself sends a Matrix
+event. The Companion must explicitly call the Matrix send tool to deliver a
+message. For a Matrix-initiated turn, it may select any event ID in that
+turn's injected room context as an optional reply anchor; messages that arrive
+later stay in the next buffer and cannot be selected. Stable Matrix-use policy
+is installed once as an active-Companion-scoped system prompt; each turn
+injects only the changing room data and trigger identity.
 
-The locked Companion also receives exactly two native tools in its scoped
+The locked Companion also receives exactly three native tools in its scoped
 conversation:
 
-- **`matrix_list_room_members`** takes no arguments and returns a bounded (at
+- **`matrix_list_members`** takes no arguments and returns a bounded (at
   most 128 entries and 16,000 rendered characters), sorted list of
   `{ userId, displayName }` entries for current joined members of the
   configured room only. `displayName` is the current local room label (which
   the Matrix SDK may disambiguate) and falls back to `userId` when unavailable.
   It intentionally omits avatars, presence, power levels, membership history,
   and every other room.
-- **`matrix_send_room_message`** takes one non-empty plain-text `body` of at
-  most 16,000 characters and an optional `mentions` array. Each mention must
+- **`matrix_read_recent_messages`** takes a required integer `last` from 1 to
+  50 and reads up to that many latest ordinary text events from the configured room
+  through Matrix history, rather than relying on local timeline state after a
+  restart. It returns eligible records in chronological order, includes prior
+  bot-authored text for conversational continuity, and excludes notices,
+  edits, threads, media, and formatted HTML. The result is bounded and remains
+  untrusted room data. Calling it does not create a Companion turn.
+- **`matrix_send_message`** takes one non-empty plain-text `body` of at most
+  16,000 characters, optional `replyToEventId`, and optional `mentions` array.
+  `replyToEventId` must exactly equal an event ID in the context of the current
+  Matrix-initiated turn; omitting it sends an ordinary room message. Each mention must
   exactly equal one unique current display label in the bounded roster returned
-  by `matrix_list_room_members`; labels are case-sensitive and are not
+  by `matrix_list_members`; labels are case-sensitive and are not
   trimmed, normalized, guessed, or looked up remotely. The tool resolves those
   labels locally to Matrix user IDs and emits one ordinary `m.text` event with
   `m.mentions: { user_ids: [...] }`. Repeated labels are harmless and produce
   one ID; omitting `mentions` and passing `[]` are identical no-mention calls.
   The caller's body is sent unchanged: the tool does not add visible `@label`
-  text, accept Matrix IDs or `@room`, impersonate, reply, or create a thread.
+  text, accept Matrix IDs or `@room`, impersonate, create a thread, or reply
+  outside the current injected Matrix context.
   If a label is stale, unknown, or ambiguous (including after a local roster
   change detected before send), the whole call is rejected before any event is
   sent. The bounded error includes the requested label and a JSON list of
@@ -132,16 +144,14 @@ conversation:
   a sync **ERROR**; other unavailable Matrix connections produce the same
   bounded failure boundary.
 
-These registrations belong only to the startup-locked Companion and are
-removed when the bridge stops or ownership is released. A Web/CLI-initiated
-turn may use the send tool to greet the room; that turn's final Assistant text
-stays in DSH because it has no Matrix pending-turn attribution, and the
-bot-authored event is ignored by the bridge so it cannot retrigger a turn.
+These registrations and the Matrix policy section belong only to the
+startup-locked Companion and are removed when the bridge stops or ownership is
+released. A Web/CLI-initiated turn may use the send tool to greet the room, but
+cannot select a Matrix reply anchor; its final Assistant text stays in DSH.
 
 If no eligible conversation existed when DSH started, the Matrix client stays
-connected but the bridge remains **unbound** until the next restart. A
-qualifying trigger receives at most one concise reminder per minute to start a
-Companion conversation in the selected workspace and restart DSH. Saving
+connected but the bridge remains **unbound** until the next restart. It does
+not emit a room message, because tools are the sole Matrix delivery path. Saving
 settings never switches the running client or conversation; restart is the
 explicit boundary.
 
@@ -172,20 +182,20 @@ threads, reactions, or any other Matrix account capability.
    bounded missing/unbound state).
 4. In the allowed room, send two ordinary messages followed by a mention,
    verified reply, or the Matrix identity's current room display label. Confirm
-   the bounded-context answer replies to that event. Send a notice, edit,
-   thread, and another-room message; confirm none enters context or replies.
-5. Ask the companion to answer exactly `NO_REPLY` and confirm that the turn is
-   visible in DSH but no room message is sent. Toggle **Respond to all**, save,
-   restart, and verify an ordinary text message triggers.
-6. Ask the locked Companion to call `matrix_list_room_members`; verify only
-   bounded `{ userId, displayName }` entries from the configured room. Ask it to
-   call `matrix_send_room_message` with a short greeting and confirm the single
-   plain-text room message, DSH approval prompt, and absence of a second bridge
-   turn. Then pass one or more exact roster display labels in `mentions` and
+   the Companion receives the bounded context but Matrix receives nothing until
+   it explicitly calls `matrix_send_message`. Send a notice, edit, thread, and
+   another-room message; confirm none enters context.
+5. Restart DSH, then in the next Companion turn call
+   `matrix_read_recent_messages` with 10 or 20. Confirm it reads bounded
+   chronological ordinary text, including a prior bot message when present.
+6. Ask the locked Companion to call `matrix_list_members`; verify only bounded
+   `{ userId, displayName }` entries from the configured room. Call
+   `matrix_send_message` with a short greeting and confirm the single
+   plain-text room message and DSH approval prompt. In a Matrix-triggered turn,
+   select one injected event ID as `replyToEventId`; it must become the Matrix
+   reply relation. Then pass exact roster display labels in `mentions` and
    verify the visible body is unchanged while Matrix receives
-   `m.mentions.user_ids`. Try omitted/empty mentions, a stale or ambiguous
-   label, an empty/overlong body, and an unavailable connection; invalid labels
-   must send nothing and return only the bounded JSON correction list.
+   `m.mentions.user_ids`. Invalid anchors or labels must send nothing.
 7. Stop/reload DSH and confirm the Matrix client, listeners, queued work,
    scoped tool registrations, and any plugin-resumed Agent stop before a new
    instance starts.

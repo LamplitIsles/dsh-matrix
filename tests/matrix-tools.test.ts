@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   createMatrixToolDefinitions,
   listJoinedMatrixMembers,
-  MATRIX_LIST_ROOM_MEMBERS,
-  MATRIX_SEND_ROOM_MESSAGE
+  readRecentMatrixMessages,
+  MATRIX_LIST_MEMBERS,
+  MATRIX_READ_RECENT_MESSAGES,
+  MATRIX_SEND_MESSAGE
 } from "../src/matrix-tools.js";
 import { MAX_MATRIX_TOOL_BODY_CHARS, MAX_PROMPT_CHARS, MAX_ROOM_MEMBERS } from "../src/constants.js";
 import type { MatrixClientLike } from "../src/matrix-protocol.js";
@@ -13,7 +15,7 @@ function execution(signal = new AbortController().signal): any {
 }
 
 function definitions(client: MatrixClientLike, roomId = "!allowed:example") {
-  return createMatrixToolDefinitions({ getClient: () => client, roomId, isReady: () => true });
+  return createMatrixToolDefinitions({ getClient: () => client, roomId, isReady: () => true, getReplyAnchorIds: () => [] });
 }
 
 describe("fixed-room Matrix tools", () => {
@@ -92,10 +94,55 @@ describe("fixed-room Matrix tools", () => {
     const client: MatrixClientLike = {
       sendMessage: async (roomId, content) => { sent.push({ roomId, content }); }
     };
-    const tool = definitions(client, "!fixed:example").find((candidate) => candidate.name === MATRIX_SEND_ROOM_MESSAGE)!;
+    const tool = definitions(client, "!fixed:example").find((candidate) => candidate.name === MATRIX_SEND_MESSAGE)!;
     const result = await tool.execute({ body: "hello group", roomId: "!attacker:example" } as any, execution());
     expect(result).toEqual({ sent: true });
     expect(sent).toEqual([{ roomId: "!fixed:example", content: { msgtype: "m.text", body: "hello group" } }]);
+  });
+
+  it("reads recent server messages chronologically, including prior bot messages", async () => {
+    let request: unknown[] = [];
+    const client: MatrixClientLike = {
+      getRoom: () => ({ getMember: (userId) => ({ userId, name: userId === "@bot:example" ? "Companion" : "Alice" }) }),
+      createMessagesRequest: async (...args) => {
+        request = args;
+        return { chunk: [
+          { event: { type: "m.room.message", event_id: "$bot", sender: "@bot:example", content: { msgtype: "m.text", body: "previous reply" } } },
+          { event: { type: "m.room.message", event_id: "$edit", sender: "@alice:example", content: { msgtype: "m.text", body: "replacement", "m.relates_to": { rel_type: "m.replace" } } } },
+          { event: { type: "m.room.message", event_id: "$human", sender: "@alice:example", content: { msgtype: "m.text", body: "latest question" } } }
+        ] };
+      }
+    };
+    const tool = definitions(client).find((candidate) => candidate.name === MATRIX_READ_RECENT_MESSAGES)!;
+    await expect(tool.execute({ last: 10 }, execution())).resolves.toEqual({ messages: [
+      { eventId: "$human", roomId: "!allowed:example", sender: "@alice:example", displayName: "Alice", text: "latest question" },
+      { eventId: "$bot", roomId: "!allowed:example", sender: "@bot:example", displayName: "Companion", text: "previous reply" }
+    ] });
+    expect(request).toEqual(["!allowed:example", null, 10, "b"]);
+  });
+
+  it("paginates past filtered events and excludes formatted HTML", async () => {
+    const requests: Array<string | null> = [];
+    const client: MatrixClientLike = {
+      createMessagesRequest: async (_roomId, from, _limit, _direction) => {
+        requests.push(from);
+        if (from === null) return { end: "older", chunk: [
+          { event: { type: "m.room.message", event_id: "$html", sender: "@alice:example", content: { msgtype: "m.text", body: "plaintext fallback", format: "org.matrix.custom.html", formatted_body: "<b>HTML</b>" } } },
+          { event: { type: "m.room.message", event_id: "$notice", sender: "@alice:example", content: { msgtype: "m.notice", body: "notice" } } }
+        ] };
+        return { chunk: [{ event: { type: "m.room.message", event_id: "$older", sender: "@alice:example", content: { msgtype: "m.text", body: "usable" } } }] };
+      }
+    };
+    await expect(readRecentMatrixMessages(client, "!allowed:example", 1)).resolves.toMatchObject([{ eventId: "$older", text: "usable" }]);
+    expect(requests).toEqual([null, "older"]);
+  });
+
+  it("rejects a reply anchor that was not injected into the current Matrix turn", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const client: MatrixClientLike = { sendMessage: async (_roomId, content) => { sent.push(content); } };
+    const tool = definitions(client).find((candidate) => candidate.name === MATRIX_SEND_MESSAGE)!;
+    await expect(tool.execute({ body: "nope", replyToEventId: "$unknown" }, execution())).rejects.toThrow("not available in the current Matrix context");
+    expect(sent).toHaveLength(0);
   });
 
   it("resolves exact current display labels to intentional Matrix mentions", async () => {
@@ -109,7 +156,7 @@ describe("fixed-room Matrix tools", () => {
       }),
       sendMessage: async (roomId, content) => { sent.push({ roomId, content }); }
     };
-    const tool = definitions(client, "!fixed:example").find((candidate) => candidate.name === MATRIX_SEND_ROOM_MESSAGE)!;
+    const tool = definitions(client, "!fixed:example").find((candidate) => candidate.name === MATRIX_SEND_MESSAGE)!;
     await tool.execute({ body: "hello @people", mentions: ["Alice", "Alice", "Bob"] }, execution());
     expect(sent).toEqual([{
       roomId: "!fixed:example",
@@ -127,7 +174,7 @@ describe("fixed-room Matrix tools", () => {
       getRoom: () => ({ getJoinedMembers: () => [{ userId: "@alice:example", name: "Alice", membership: "join" }] }),
       sendMessage: async (_roomId, content) => { sent.push(content); }
     };
-    const tool = definitions(client)[1]!;
+    const tool = definitions(client)[2]!;
     await tool.execute({ body: "without mentions" }, execution());
     await tool.execute({ body: "empty mentions", mentions: [] }, execution());
     expect(sent).toEqual([
@@ -149,7 +196,7 @@ describe("fixed-room Matrix tools", () => {
       }),
       sendMessage: async (_roomId, content) => { sent.push(content); }
     };
-    const tool = definitions(client)[1]!;
+    const tool = definitions(client)[2]!;
     for (const label of ["Missing", "alice", " @alice:example", "@alice:example", "@room", "Same"]) {
       await expect(tool.execute({ body: "must not send", mentions: [label] }, execution()))
         .rejects.toThrow(new RegExp(label.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")));
@@ -170,7 +217,7 @@ describe("fixed-room Matrix tools", () => {
         ]
       })
     };
-    const tool = definitions(client)[1]!;
+    const tool = definitions(client)[2]!;
     await expect(tool.execute({ body: "must not send", mentions: ["Missing"] }, execution()))
       .rejects.toThrow(/Valid display labels: \["Alice"\]$/);
   });
@@ -184,7 +231,7 @@ describe("fixed-room Matrix tools", () => {
     const client: MatrixClientLike = {
       getRoom: () => ({ getJoinedMembers: () => members })
     };
-    const tool = definitions(client)[1]!;
+    const tool = definitions(client)[2]!;
     let failure: unknown;
     try {
       await tool.execute({ body: "must not send", mentions: ["unknown"] }, execution());
@@ -212,18 +259,18 @@ describe("fixed-room Matrix tools", () => {
       }),
       sendMessage: async (_roomId, content) => { sent.push(content); }
     };
-    const tool = definitions(client)[1]!;
+    const tool = definitions(client)[2]!;
     await expect(tool.execute({ body: "stale", mentions: ["Alice"] }, execution()))
       .rejects.toThrow(/\["Renamed"\]/);
     expect(sent).toHaveLength(0);
   });
 
   it("rejects invalid bodies, unavailable connections, and cancellation with bounded errors", async () => {
-    const tool = definitions({ sendMessage: async () => undefined })[1]!;
+    const tool = definitions({ sendMessage: async () => undefined })[2]!;
     await expect(tool.execute({ body: "   " }, execution())).rejects.toThrow("non-empty");
     await expect(tool.execute({ body: "x".repeat(MAX_MATRIX_TOOL_BODY_CHARS + 1) }, execution())).rejects.toThrow("at most");
 
-    const unavailable = definitions(undefined as unknown as MatrixClientLike)[1]!;
+    const unavailable = definitions(undefined as unknown as MatrixClientLike)[2]!;
     await expect(unavailable.execute({ body: "hello" }, execution())).rejects.toThrow("unavailable");
 
     const controller = new AbortController();
@@ -234,15 +281,15 @@ describe("fixed-room Matrix tools", () => {
     await expect(broken.execute({}, execution())).rejects.not.toThrow("secret token");
   });
 
-  it("exposes exactly the two native names and no room parameter", () => {
+  it("exposes exactly the three native names and no room parameter", () => {
     const tools = definitions({});
-    expect(tools.map((tool) => tool.name)).toEqual([MATRIX_LIST_ROOM_MEMBERS, MATRIX_SEND_ROOM_MESSAGE]);
+    expect(tools.map((tool) => tool.name)).toEqual([MATRIX_LIST_MEMBERS, MATRIX_READ_RECENT_MESSAGES, MATRIX_SEND_MESSAGE]);
     expect(tools[0]!.parameters).toMatchObject({ type: "object", properties: {} });
-    expect(tools[1]!.parameters).toMatchObject({
+    expect(tools[2]!.parameters).toMatchObject({
       type: "object",
       properties: { body: { type: "string" }, mentions: { type: "array", items: { type: "string" } } },
       required: ["body"]
     });
-    expect(tools[1]!.parameters).not.toHaveProperty("roomId");
+    expect(tools[2]!.parameters).not.toHaveProperty("roomId");
   });
 });

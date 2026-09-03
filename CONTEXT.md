@@ -32,12 +32,12 @@ _Avoid_: Queue
 An allowed-room message that mentions the Matrix identity, literally contains its current non-empty room display label, or is a verified reply to its message. A reply trigger drains the room context buffer, starts one companion turn, and receives that turn's Matrix reply.
 _Avoid_: Mention
 
-**Suppressed Matrix reply**:
-An otherwise completed Matrix-triggered turn whose final assistant text is the exact sentinel `NO_REPLY`; its text remains in the Companion conversation but is not sent to the allowed room.
-_Avoid_: No-op, skipped turn
+**DSH-only turn completion**:
+The final Assistant text recorded when a Companion turn ends. It remains in DSH and never itself emits a Matrix event; a Matrix message is emitted only by an explicit fixed-room Matrix send.
+_Avoid_: Automatic Matrix reply, suppressed reply
 
 **Matrix context envelope**:
-The deterministic plugin-authored ordinary DSH user message that quotes drained room-context records, uses each sender's current room display label as the primary speaker label alongside stable Matrix sender/event identities, marks them as untrusted data, names the trigger, and explains the exact `NO_REPLY` token. Missing labels fall back to the stable ID.
+The deterministic plugin-authored ordinary DSH user message that quotes drained room-context records, uses each sender's current room display label as the primary speaker label alongside stable Matrix sender/event identities, marks them as untrusted data, and names the trigger. Missing labels fall back to the stable ID.
 _Avoid_: Raw room transcript, prompt injection
 
 **Matrix provenance**:
@@ -45,20 +45,28 @@ The bounded bridge-owned routing metadata retained beside a Matrix context envel
 _Avoid_: Provider metadata, mutable room label
 
 **Matrix reply anchor**:
-The triggering Matrix event ID carried in the outbound `m.relates_to.m.in_reply_to` relation. A reply anchor always points to the explicit trigger, never to an older buffered context record.
-_Avoid_: Thread, quote fallback
+An event ID from the Matrix context injected into the current Companion turn, selected explicitly by the Agent for an outbound `m.relates_to.m.in_reply_to` relation. It may identify any injected record, not only the reply trigger.
+_Avoid_: Automatic reply target, thread, quote fallback
 
 **Fixed-room Matrix tools**:
-The two native tools scoped to the locked active Companion: `matrix_list_room_members` and `matrix_send_room_message`. Neither accepts a room ID; both derive the one restart-scoped allowed room, require a usable PREPARED bridge, and disappear when the bridge stops or releases ownership.
+The three native tools scoped to the locked active Companion: `matrix_list_members`, `matrix_read_recent_messages`, and `matrix_send_message`. None accepts a room ID; all derive the one restart-scoped allowed room, require a usable PREPARED bridge, and disappear when the bridge stops or releases ownership.
 _Avoid_: Matrix-wide tools, room selector
 
+**Recent room read**:
+A bounded, read-only retrieval of the allowed room's most recent ordinary text records from Matrix, requested by count. It includes human and Matrix-connection-authored records so a restarted Companion can recover conversational context, but does not independently start a Companion turn.
+_Avoid_: Automatic restart catch-up, room export
+
+**Matrix companion policy**:
+The stable, plugin-authored instructions scoped to the active conversation that define Matrix tool use, explicit delivery, reply-anchor authority, and the untrusted status of room data. It is system-prompt material rather than repeated room-context content.
+_Avoid_: Room context, user instruction
+
 **Joined-user roster**:
-The bounded sorted `{ userId, displayName }` entries returned by `matrix_list_room_members` from the allowed room's current joined membership state. `displayName` is the current local room label (possibly SDK-disambiguated) and falls back to `userId`; avatars, profile lookups, presence, power levels, membership history, and other rooms are excluded.
+The bounded sorted `{ userId, displayName }` entries returned by `matrix_list_members` from the allowed room's current joined membership state. `displayName` is the current local room label (possibly SDK-disambiguated) and falls back to `userId`; avatars, profile lookups, presence, power levels, membership history, and other rooms are excluded.
 _Avoid_: Member history
 
 **Fixed-room Matrix send**:
-The bounded plain-text operation performed by `matrix_send_room_message`, which emits one ordinary `m.text` event to the allowed room through DSH's existing approval and cancellation pipeline. Its optional `mentions` values are exact, case-sensitive current display labels from the bounded joined-user roster; the bridge resolves them locally to stable Matrix IDs and emits `m.mentions.user_ids` without changing the caller's visible body. Omitted and empty mentions have the same no-mention behavior. Unknown, stale, duplicate-label, direct-ID, and `@room` inputs fail before send with a bounded JSON correction list of valid display labels. It cannot impersonate, reply, thread, or choose another room.
-_Avoid_: Matrix reply tool, arbitrary room send
+The bounded plain-text operation performed by `matrix_send_message`, which is the only way a Companion emits an `m.text` event to the allowed room through DSH's existing approval and cancellation pipeline. Its optional reply anchor must be an event ID injected into the current Matrix turn; without one it sends an ordinary room message. Its optional `mentions` values are exact, case-sensitive current display labels from the bounded joined-user roster; the bridge resolves them locally to stable Matrix IDs and emits `m.mentions.user_ids` without changing the caller's visible body. Omitted and empty mentions have the same no-mention behavior. Unknown, stale, duplicate-label, direct-ID, `@room`, and out-of-context reply-anchor inputs fail before send with a bounded JSON correction list of valid display labels. It cannot impersonate, thread, or choose another room.
+_Avoid_: Automatic Matrix reply, arbitrary room send
 
 **DSH-only proactive turn**:
 A Web/CLI-initiated Companion turn that uses the fixed-room send tool. Its bot-authored event is ignored by the bridge, so the turn's final Assistant text remains in DSH and cannot start a Matrix-triggered follow-up.
