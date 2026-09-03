@@ -79,9 +79,6 @@ export function apply(ctx: HostContext): void {
     }
   });
 
-  ctx.on("agent/inbox/claimed", (payload: unknown) => bridge.onInboxClaimed(payload as never));
-  ctx.on("session/event", (session: unknown, event: unknown) => bridge.onSessionEvent(session as never, event as never));
-
   ctx.effect(() => {
     const disposeRpc = ctx.connection.rpc.handle(RPC_CHANNEL, bridgeRpcHandler(bridge));
     void bridge.start();

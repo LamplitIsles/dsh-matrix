@@ -9,6 +9,7 @@ import {
 import {
   matrixEventContent,
   matrixEventId,
+  matrixEventRoomId,
   matrixEventSender,
   matrixEventType,
   matrixMemberDisplayName,
@@ -33,8 +34,6 @@ export interface MatrixToolDependencies {
   roomId: string;
   /** The bridge gate; tools are unavailable before prepared sync or after failure. */
   isReady: () => boolean;
-  /** Reply anchors exist only while the bridge is processing one Matrix turn. */
-  getReplyAnchorIds: () => readonly string[];
 }
 
 export interface MatrixRoomMember {
@@ -55,7 +54,7 @@ export interface MatrixSendMessageResult {
 }
 
 class MatrixMentionCorrectionError extends Error {}
-class MatrixReplyAnchorError extends Error {}
+class MatrixReplyTargetError extends Error {}
 
 function abortError(): Error {
   return new Error("Matrix tool operation cancelled.");
@@ -73,9 +72,9 @@ function sendFailureError(): Error {
   return new Error("Matrix message could not be sent.");
 }
 
-function replyAnchorError(eventId: unknown): Error {
+function replyTargetError(eventId: unknown): Error {
   const requested = typeof eventId === "string" ? eventId.slice(0, MAX_ROOM_MEMBER_ID_CHARS) : String(eventId ?? "").slice(0, MAX_ROOM_MEMBER_ID_CHARS);
-  return new MatrixReplyAnchorError(`Matrix reply event ID ${JSON.stringify(requested)} is not available in the current Matrix context.`);
+  return new MatrixReplyTargetError(`Matrix reply event ID ${JSON.stringify(requested)} is not available in the configured Matrix room history.`);
 }
 
 function mentionCorrectionError(label: unknown, validDisplayLabels: readonly string[]): Error {
@@ -211,6 +210,20 @@ function validMessageBody(body: unknown): body is string {
 
 function validRecentLimit(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_RECENT_MESSAGES;
+}
+
+async function verifyReplyTarget(client: MatrixClientLike, roomId: string, eventId: unknown, signal: AbortSignal): Promise<string> {
+  if (typeof eventId !== "string" || !eventId.trim() || eventId.length > MAX_PROVENANCE_CHARS || !client.fetchRoomEvent) throw replyTargetError(eventId);
+  try {
+    const event = await client.fetchRoomEvent(roomId, eventId, signal);
+    if (signal.aborted || matrixEventId(event) !== eventId) throw replyTargetError(eventId);
+    const returnedRoomId = matrixEventRoomId(event);
+    if (returnedRoomId !== undefined && returnedRoomId !== roomId) throw replyTargetError(eventId);
+    return eventId;
+  } catch (error) {
+    if (error instanceof MatrixReplyTargetError) throw error;
+    throw replyTargetError(eventId);
+  }
 }
 
 function supportedRecentText(event: MatrixEventLike, roomId: string): MatrixContextRecord | undefined {
@@ -400,10 +413,10 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
 
   const sendTool = defineTool({
     name: MATRIX_SEND_MESSAGE,
-    description: `Send one bounded plain-text message to the configured allowed Matrix room (maximum ${MAX_MATRIX_TOOL_BODY_CHARS} characters). Optional replyToEventId must be an event ID from the current Matrix context; optional mentions must exactly match current room display labels.`,
+    description: `Send one bounded plain-text message to the configured allowed Matrix room (maximum ${MAX_MATRIX_TOOL_BODY_CHARS} characters). Optional replyToEventId must identify a message in that room's server history; optional mentions must exactly match current room display labels.`,
     parameters: {
       body: { type: "string", required: true, description: "Plain-text message body." },
-      replyToEventId: { type: "string", description: "Optional event ID from the current Matrix context to reply to." },
+      replyToEventId: { type: "string", description: "Optional event ID from the configured room's history to reply to." },
       mentions: {
         type: "array",
         description: "Optional exact current room display labels to mention.",
@@ -431,10 +444,10 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
         const client = deps.getClient();
         if (!client || !deps.roomId.trim()) throw unavailableError();
         const rawMentions = (args as { mentions?: unknown } | undefined)?.mentions;
-        const replyToEventId = (args as { replyToEventId?: unknown } | undefined)?.replyToEventId;
-        if (replyToEventId !== undefined && (typeof replyToEventId !== "string" || !deps.getReplyAnchorIds().includes(replyToEventId))) {
-          throw replyAnchorError(replyToEventId);
-        }
+        const requestedReplyToEventId = (args as { replyToEventId?: unknown } | undefined)?.replyToEventId;
+        const replyToEventId = requestedReplyToEventId === undefined
+          ? undefined
+          : await verifyReplyTarget(client, deps.roomId, requestedReplyToEventId, signal);
         if (rawMentions !== undefined && !Array.isArray(rawMentions)) {
           throw mentionCorrectionError(rawMentions, []);
         }
@@ -468,7 +481,7 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
         if (signal.aborted) throw abortError();
         if (error instanceof Error && error.message === "Matrix bridge is not ready: initial sync is not prepared.") throw error;
         if (error instanceof MatrixMentionCorrectionError) throw error;
-        if (error instanceof MatrixReplyAnchorError) throw error;
+        if (error instanceof MatrixReplyTargetError) throw error;
         if (error instanceof Error && (error.message === "Matrix message could not be sent." || error.message === "Matrix connection or the configured room is unavailable.")) throw error;
         throw sendFailureError();
       }
