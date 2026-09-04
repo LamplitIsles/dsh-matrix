@@ -19,6 +19,12 @@ interface RuntimeProcess {
   launchUrl: string;
 }
 
+async function packageVersion(root: string): Promise<string> {
+  const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { version?: unknown };
+  if (typeof manifest.version !== "string") throw new Error("package.json has no package version");
+  return manifest.version;
+}
+
 function rootDirectory(): string {
   return resolve(new URL("..", import.meta.url).pathname);
 }
@@ -160,6 +166,7 @@ async function main(): Promise<void> {
     throw new Error("pack-smoke requires a fresh `bun run build`");
   }
   const entry = dshExecutable();
+  const expectedPackageVersion = await packageVersion(root);
   const temp = await mkdtemp(join(tmpdir(), "dsh-matrix-pack-smoke-"));
   const dshHome = join(temp, "dsh-home");
   const runtimeCwd = join(temp, "runtime-cwd");
@@ -188,7 +195,7 @@ async function main(): Promise<void> {
       devDependencies?: Record<string, string>;
       dsh?: { bundle?: { patch?: string }; client?: { platform?: string; inject?: string[] } };
     };
-    if (metadata.name !== "@lamplitisles/dsh-matrix" || metadata.version !== "0.1.2-rc.1") throw new Error("installed package metadata mismatch");
+    if (metadata.name !== "@lamplitisles/dsh-matrix" || metadata.version !== expectedPackageVersion) throw new Error("installed package metadata mismatch");
     if (metadata.dsh?.bundle?.patch !== "./cordis.patch.yml" || metadata.dsh.client?.platform !== "web") throw new Error("installed DSH manifest mismatch");
     if (!metadata.dsh.client.inject?.includes("@deepseek-ai/dsh-client-ui-workspace")) throw new Error("workspace client injection missing");
     if (metadata.peerDependencies?.["@deepseek-ai/cordis"] !== "4.0.2") throw new Error("Cordis peer is not pinned to 4.0.2");

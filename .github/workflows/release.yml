@@ -24,6 +24,7 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - run: npm install --global npm@">=11.10.0"
+      - run: corepack enable pnpm
       - run: bun install --frozen-lockfile
       - name: Synchronize package version from release tag
         run: bun run release:sync-version
