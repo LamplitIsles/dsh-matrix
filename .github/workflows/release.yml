@@ -25,6 +25,10 @@ jobs:
           package-manager-cache: false
       - run: npm install --global npm@">=11.10.0"
       - run: corepack enable pnpm
+      - name: Install the fixed DSH runtime for the artifact smoke check
+        run: |
+          npm install --global @deepseek-ai/dsh@0.1.2-rc.1
+          echo "DSH_CLI=$(npm root --global)/@deepseek-ai/dsh/lib/bin.js" >> "$GITHUB_ENV"
       - run: bun install --frozen-lockfile
       - name: Synchronize package version from release tag
         run: bun run release:sync-version
