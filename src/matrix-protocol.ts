@@ -420,6 +420,17 @@ export async function captureMatrixEvent(
   };
 }
 
+/** Build the optional relation/mention metadata shared by every outbound message type. */
+function matrixOptionalMessageMetadata(
+  replyToEventId?: string,
+  mentionUserIds?: readonly string[]
+): Record<string, unknown> {
+  return {
+    ...(replyToEventId ? { "m.relates_to": { "m.in_reply_to": { event_id: replyToEventId } } } : {}),
+    ...(mentionUserIds && mentionUserIds.length > 0 ? { "m.mentions": { user_ids: [...mentionUserIds] } } : {})
+  };
+}
+
 /** Build one ordinary Matrix text payload, optionally carrying intentional user mentions. */
 export function matrixTextMessage(
   roomId: string,
@@ -431,8 +442,7 @@ export function matrixTextMessage(
   return {
     msgtype: "m.text",
     body,
-    ...(replyToEventId ? { "m.relates_to": { "m.in_reply_to": { event_id: replyToEventId } } } : {}),
-    ...(mentionUserIds && mentionUserIds.length > 0 ? { "m.mentions": { user_ids: [...mentionUserIds] } } : {})
+    ...matrixOptionalMessageMetadata(replyToEventId, mentionUserIds)
   };
 }
 
@@ -455,7 +465,6 @@ export function matrixMediaMessage(
     url,
     ...(options.filename ? { filename: options.filename } : {}),
     info: { mimetype: mimeType, size },
-    ...(options.replyToEventId ? { "m.relates_to": { "m.in_reply_to": { event_id: options.replyToEventId } } } : {}),
-    ...(options.mentionUserIds && options.mentionUserIds.length > 0 ? { "m.mentions": { user_ids: [...options.mentionUserIds] } } : {})
+    ...matrixOptionalMessageMetadata(options.replyToEventId, options.mentionUserIds)
   };
 }
