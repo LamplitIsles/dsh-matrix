@@ -6,7 +6,7 @@ import { matrixLabels, matrixZhLabels } from "../src/client/labels.js";
 import { MatrixSettingsCard, type WorkspaceSource } from "../src/client/settings-card.js";
 
 describe("client settings registration", () => {
-  it("injects the alpha.5 workspaces service and passes its live source to the card", () => {
+  it("injects the rc.1 workspaces service and passes its live source to the card", () => {
     expect(inject).toContain("workspaces");
     expect(inject).toContain("remote.credentials");
     const workspaceSource = {
