@@ -109,6 +109,7 @@ export {
   matrixEventRoomId,
   matrixEventSender,
   matrixEventType,
+  matrixMediaMessage,
   matrixMemberDisplayName,
   matrixTextMessage,
   readLocalRoomDisplayName,
@@ -129,14 +130,20 @@ export {
   readRecentMatrixMessages,
   MATRIX_LIST_MEMBERS,
   MATRIX_READ_RECENT_MESSAGES,
-  MATRIX_SEND_MESSAGE
+  MATRIX_SEND_MESSAGE,
+  MATRIX_SEND_FILE,
+  MAX_RECENT_MESSAGES
 } from "./matrix-tools.js";
 export type {
+  KeposTtsServiceLike,
   MatrixListMembersResult,
+  MatrixSendFileResult,
   MatrixReadRecentMessagesResult,
   MatrixRoomMember,
   MatrixSendMessageResult,
-  MatrixToolDependencies
+  MatrixToolAgentLike,
+  MatrixToolDependencies,
+  MatrixFileSystemLike
 } from "./matrix-tools.js";
 export {
   lastHumanPromptAt,
@@ -156,6 +163,7 @@ export {
   RPC_ENDPOINT,
   SETTINGS_NAMESPACE,
   MAX_MATRIX_TOOL_BODY_CHARS,
+  MAX_MATRIX_MEDIA_BYTES,
   MAX_ROOM_MEMBER_ID_CHARS,
   MAX_ROOM_MEMBERS
 } from "./constants.js";
