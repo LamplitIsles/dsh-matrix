@@ -1,13 +1,13 @@
 # dsh-matrix
 
-`@lamplitisles/dsh-matrix` is a DSH `0.1.2-alpha.3` plugin that connects one
+`@lamplitisles/dsh-matrix` is a DSH `0.1.2-alpha.5` plugin that connects one
 Matrix identity and one room to one already-existing DeepSeek Harness Companion
 conversation. It never creates a session and never changes the conversation
 selected after startup.
 
 ## Requirements and installation
 
-- DSH `0.1.2-alpha.3` with the native web settings surface
+- DSH `0.1.2-alpha.5` with the native web settings surface
 - Node.js 22 or newer
 - A Matrix account that has already joined the allowed room
 - The Kepos Speech plugin is optional; voice sends require its Host `keposSpeech`
@@ -17,7 +17,7 @@ selected after startup.
 Install the package in the DSH deployment that owns your bundle registry:
 
 ```sh
-npm install @lamplitisles/dsh-matrix@0.1.2-alpha.3
+npm install @lamplitisles/dsh-matrix@0.1.2-alpha.5
 ```
 
 The package declares the DSH Host/client bundle patch. Restart DSH after
