@@ -10,7 +10,7 @@ selected after startup.
 - DSH `0.1.2-alpha.3` with the native web settings surface
 - Node.js 22 or newer
 - A Matrix account that has already joined the allowed room
-- The Kepos TTS plugin is optional; voice sends require its Host `keposTts`
+- The Kepos Speech plugin is optional; voice sends require its Host `keposSpeech`
   service, while text and workspace-file sends do not.
 - An access token for that account (password and SSO login are not implemented)
 
@@ -128,10 +128,10 @@ conversation:
   16,000 characters, optional `voice` boolean, optional `replyToEventId`, and
   optional `mentions` array. With `voice` omitted or false it emits one
   `m.text` event. With `voice: true`, `body` is passed to the optional
-  `ctx.get("keposTts")` service as `{ sessionId, text }`; the service must
+  `ctx.get("keposSpeech")` service as `{ sessionId, text }`; the service must
   return `{ mediaType: "audio/mpeg", data: Uint8Array }`. The bytes are
   uploaded first and exactly one `m.audio` event named `语音消息.mp3` is sent;
-  no transcript or text fallback is emitted. If Kepos is not mounted, returns
+  no transcript or text fallback is emitted. If Kepos Speech is not mounted, returns
   invalid audio, or the upload/send/readiness operation fails, the call fails
   with a bounded error and sends no fallback event.
   `replyToEventId` must exactly equal an event Matrix can retrieve from the
@@ -196,7 +196,7 @@ transactional outbox, or exactly-once delivery guarantees. The fixed-room
 tools do not provide room selection, profile lookup, presence, power levels,
 membership history, invitations, moderation, arbitrary Matrix media/HTML,
 threads, reactions, or any other Matrix account capability. Media delivery is
-limited to the optional Kepos MP3 contract and one bounded workspace file per
+limited to the optional Kepos Speech MP3 contract and one bounded workspace file per
 call; it does not provide recording, video, albums, retries, progress, or
 cleanup of an uploaded-but-unsent object.
 
@@ -224,7 +224,7 @@ cleanup of an uploaded-but-unsent object.
    verify the visible body is unchanged while Matrix receives
    `m.mentions.user_ids`. Invalid anchors or labels must send nothing.
    In a separate approved turn call `matrix_send_message` with `voice: true`.
-   With Kepos mounted, verify one uploaded `语音消息.mp3` `m.audio` event and
+   With Kepos Speech mounted, verify one uploaded `语音消息.mp3` `m.audio` event and
    no `m.text` transcript; with the service absent, verify a bounded error and
    no Matrix event. Call `matrix_send_file` with an image and a regular report
    from the active workspace; verify the `m.image`/`m.file` payload, MIME
@@ -234,7 +234,45 @@ cleanup of an uploaded-but-unsent object.
    scoped tool registrations, and any plugin-resumed Agent stop before a new
    instance starts.
 
-For an isolated release check, run `npm run typecheck`, `npm test`, `npm run
-build`, then `npm pack --dry-run`; the packed tarball contains both Host/client
-entries, declarations, the Cordis patch, this README, license notices, and the
-inlined client stylesheet.
+## Maintainer release setup
+
+The tag-only workflow in `.github/workflows/release.yml` verifies the exact
+package that it publishes. Before the first automated release, a maintainer
+must:
+
+1. Create or confirm the public `@lamplitisles` npm scope and manually publish
+   the initial `@lamplitisles/dsh-matrix` beta package from a maintainer
+   workstation (after building, run `npm publish --access public --tag beta`).
+2. Configure npm Trusted Publishing for `@lamplitisles/dsh-matrix`, GitHub
+   repository `LamplitIsles/dsh-matrix`, workflow
+   `.github/workflows/release.yml`, and the protected GitHub `npm` environment.
+3. Create the protected GitHub `npm` environment with the required release
+   approval policy.
+
+For a routine release, update `version` in `package.json`, run the local checks,
+and create a matching semantic version tag:
+
+```sh
+bun install --frozen-lockfile
+bun run typecheck
+bun run test
+bun run build
+GITHUB_REF_NAME=v0.1.0 bun run release:check
+bun run pack-smoke
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Tags must be `v<semver>` (for example `v0.1.0` or `v0.1.0-beta.1`) and must
+match the package version exactly. Stable tags publish with npm's `latest`
+dist-tag; prerelease tags publish with `beta`. The verify job performs a frozen
+Bun install, typecheck, tests, build, release preflight, and disposable DSH
+package smoke check before uploading the tarball consumed by the protected
+publish job. Publishing uses npm OIDC provenance with `id-token: write`; no
+`NPM_TOKEN`, `NODE_AUTH_TOKEN`, or other npm credential is stored in this
+repository or required by the workflow. The one-time manual publication uses
+the maintainer's local npm authentication only.
+
+For an isolated release check, run the commands above; the packed tarball
+contains both Host/client entries, declarations, the Cordis patch, this README,
+license notices, and the inlined client stylesheet.

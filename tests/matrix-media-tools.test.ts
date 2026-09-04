@@ -4,7 +4,7 @@ import {
   MATRIX_SEND_FILE,
   MATRIX_SEND_MESSAGE,
   MAX_MATRIX_MEDIA_BYTES,
-  type KeposTtsServiceLike,
+  type KeposSpeechServiceLike,
   type MatrixFileSystemLike
 } from "../src/matrix-tools.js";
 import type { MatrixClientLike } from "../src/matrix-protocol.js";
@@ -91,7 +91,7 @@ class FakeClient implements MatrixClientLike {
 
 function mediaSetup(options: {
   fs?: FakeFs;
-  tts?: KeposTtsServiceLike;
+  speech?: KeposSpeechServiceLike;
   client?: FakeClient;
   ready?: () => boolean;
 } = {}) {
@@ -101,7 +101,7 @@ function mediaSetup(options: {
     id: "session-voice",
     session: { header: { cwd: WORKSPACE } },
     ctx: {
-      get: (name: string) => name === "fs" ? fs : name === "keposTts" ? options.tts : undefined
+      get: (name: string) => name === "fs" ? fs : name === "keposSpeech" ? options.speech : undefined
     }
   };
   const definitions = createMatrixToolDefinitions({
@@ -118,26 +118,25 @@ function exec(signal = new AbortController().signal, agent?: unknown) {
 }
 
 describe("Matrix media delivery", () => {
-  it("keeps ordinary text delivery when voice is omitted or false", async () => {
-    let syntheses = 0;
-    const setup = mediaSetup({ tts: { synthesize: async () => {
-      syntheses += 1;
-      return { mediaType: "audio/mpeg", data: new Uint8Array([1]) };
-    } } });
+  it("keeps ordinary text delivery when voice is omitted or false without Speech", async () => {
+    const setup = mediaSetup();
+    await setup.send.execute({ body: "omitted" }, exec());
     await setup.send.execute({ body: "ordinary", voice: false }, exec());
-    expect(syntheses).toBe(0);
-    expect(setup.client.sent).toEqual([{ roomId: ROOM_ID, content: { msgtype: "m.text", body: "ordinary" } }]);
+    expect(setup.client.sent).toEqual([
+      { roomId: ROOM_ID, content: { msgtype: "m.text", body: "omitted" } },
+      { roomId: ROOM_ID, content: { msgtype: "m.text", body: "ordinary" } }
+    ]);
   });
 
   it("synthesizes one fixed-room audio event with reply and mention metadata", async () => {
     const requests: Array<{ sessionId: string; text: string; signal?: AbortSignal | undefined }> = [];
-    const tts: KeposTtsServiceLike = {
+    const speech: KeposSpeechServiceLike = {
       synthesize: async (request, signal) => {
         requests.push({ ...request, signal });
         return { mediaType: "audio/mpeg", data: new Uint8Array([1, 2, 3]) };
       }
     };
-    const setup = mediaSetup({ tts });
+    const setup = mediaSetup({ speech });
     const { client, send } = setup;
     const controller = new AbortController();
     await expect(send.execute({ body: "voice body", voice: true, replyToEventId: "$history", mentions: ["Alice"] }, exec(controller.signal, setup.agent))).resolves.toEqual({ sent: true });
@@ -161,7 +160,7 @@ describe("Matrix media delivery", () => {
     const absent = mediaSetup();
     await expect(absent.send.execute({ body: "voice", voice: true }, exec())).rejects.toThrow(/voice delivery is unavailable/);
     expect(absent.client.sent).toHaveLength(0);
-    const invalid = mediaSetup({ tts: { synthesize: async () => ({ mediaType: "audio/wav", data: new Uint8Array([1]) }) } as never });
+    const invalid = mediaSetup({ speech: { synthesize: async () => ({ mediaType: "audio/wav", data: new Uint8Array([1]) }) } as never });
     await expect(invalid.send.execute({ body: "voice", voice: true }, exec())).rejects.toThrow(/invalid audio/);
     expect(invalid.client.sent).toHaveLength(0);
   });
