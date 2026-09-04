@@ -264,30 +264,25 @@ distinct prerelease and then prepare the first stable release:
    `LamplitIsles/dsh-matrix`, workflow `.github/workflows/release.yml`, and
    environment `npm`. Create that protected GitHub `npm` environment with the
    required release approval policy.
-3. Change `version` in `package.json` to `0.1.0` and commit the change before
-   creating the first OIDC stable tag. Run the stable local checks, push the
-   committed version with `og push`, and create the release tag with the
-   repository-authorized command `og tag v0.1.0` (`og tag --help` documents this
-   as “Create and push a tag”):
+3. Push the intended release commit, then create the first OIDC stable tag
+   with the repository-authorized command `og tag v0.1.0` (`og tag --help`
+   documents this as “Create and push a tag”). CI synchronizes the disposable
+   release manifest from that tag before typechecking, testing, packing, and
+   publishing the verified artifact:
 
    ```sh
-   bun install --frozen-lockfile
-   bun run typecheck
-   bun run test
-   bun run build
-   GITHUB_REF_NAME=v0.1.0 bun run release:check
-   bun run pack-smoke
    og push
    og tag v0.1.0
    ```
 
-For each subsequent release, update `version` in `package.json`, commit the
-change, rerun the local checks above with the matching `GITHUB_REF_NAME`, then
-run `og push` followed by `og tag v<version>`.
+For each subsequent release, push the intended change and create a new
+`v<version>` tag. The release tag, rather than the committed `package.json`
+version, is the release-version source of truth.
 
-Tags must be `v<semver>` (for example `v0.1.0` or `v0.1.0-beta.1`) and must
-match the package version exactly. Stable tags publish with npm's `latest`
-dist-tag; prerelease tags publish with `beta`. The verify job performs a frozen
+Tags must be `v<semver>` (for example `v0.1.0` or `v0.1.0-beta.1`). CI
+synchronizes its disposable package manifest from the tag before verification.
+Stable tags publish with npm's `latest` dist-tag; prerelease tags publish with
+`beta`. The verify job performs a frozen
 Bun install, typecheck, tests, build, release preflight, and disposable DSH
 package smoke check before uploading the tarball consumed by the protected
 publish job. Publishing uses npm OIDC provenance with `id-token: write`; no
