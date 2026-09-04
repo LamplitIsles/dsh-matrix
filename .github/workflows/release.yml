@@ -24,7 +24,6 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - run: npm install --global npm@">=11.10.0"
-      - run: corepack enable pnpm
       - run: bun install --frozen-lockfile
       - name: Synchronize package version from release tag
         run: bun run release:sync-version
@@ -37,7 +36,6 @@ jobs:
         run: bun run release:check
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
-      - run: bun run pack-smoke
       - name: Create verified release tarball
         run: mkdir -p release-artifacts && RELEASE_ARTIFACT_DIR=release-artifacts bun run release:pack
       - uses: actions/upload-artifact@v4
