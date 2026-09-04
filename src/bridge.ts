@@ -1,5 +1,5 @@
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { installModelSelection, type Agent, type AgentHandle, type ModelSelection } from "@deepseek-ai/dsh-agent";
+import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 import {
@@ -62,11 +62,6 @@ export interface BridgeAgent extends Pick<Agent, "id" | "followup"> {
   whenIdle: () => Promise<void>;
 }
 
-export interface BridgeAgentHandle {
-  agent: BridgeAgent;
-  dispose(): Promise<void>;
-}
-
 export interface BridgeDependencies {
   /** Read once at startup; restart semantics mean later edits do not switch this bridge. */
   getSettings: () => unknown;
@@ -77,13 +72,7 @@ export interface BridgeDependencies {
     archivedSessionIds?: ReadonlySet<string> | readonly string[];
   };
   inspectSession: (sessionId: string) => Promise<SessionInspectionLike>;
-  agents: {
-    get: (sessionId: string) => BridgeAgent | undefined;
-    resume: (options: { resumeSessionId: string; setup?: (agentContext: unknown) => Promise<void> }) => Promise<BridgeAgentHandle>;
-  };
-  agentPresets?: {
-    mount: (agentContext: unknown, presetId: string) => Promise<unknown>;
-  } | undefined;
+  resolveAgent: (sessionId: string) => Promise<{ agent: BridgeAgent } | { error: unknown }>;
   matrixClientFactory: (options: { baseUrl: string; accessToken: string; userId: string }) => MatrixClientLike | Promise<MatrixClientLike>;
   /** Optional diagnostic sink. Arguments are bounded and never contain credentials. */
   onReadiness?: (readiness: BridgeReadiness) => void;
@@ -119,25 +108,6 @@ async function waitWithin(promise: Promise<unknown>, timeoutMs: number): Promise
   }
 }
 
-function recordedModelSelection(inspection: SessionInspectionLike): ModelSelection | undefined {
-  let selection: ModelSelection | undefined;
-  for (const event of inspection.events) {
-    if (event.type !== "request/header" || !event.data || typeof event.data !== "object") continue;
-    const header = (event.data as { header?: unknown }).header;
-    if (!header || typeof header !== "object") continue;
-    const config = (header as { config?: unknown }).config;
-    if (!config || typeof config !== "object") continue;
-    const provider = (config as { provider?: unknown }).provider;
-    const model = (config as { model?: unknown }).model;
-    if (typeof provider !== "string" || !provider || typeof model !== "string" || !model) continue;
-    const reasoningEffort = (config as { reasoningEffort?: unknown }).reasoningEffort;
-    const next: ModelSelection = { provider, model };
-    if (typeof reasoningEffort === "string" && reasoningEffort) next.reasoningEffort = reasoningEffort as NonNullable<ModelSelection["reasoningEffort"]>;
-    selection = next;
-  }
-  return selection;
-}
-
 /**
  * Host-side Matrix companion bridge. The class has no Cordis dependency so its
  * public orchestration boundary can be exercised with test-owned fakes.
@@ -150,7 +120,6 @@ export class MatrixBridge {
   private client: MatrixClientLike | undefined;
   private boundAgent: BridgeAgent | undefined;
   private boundSessionId: string | undefined;
-  private ownedHandle: BridgeAgentHandle | undefined;
   private started = false;
   private accepting = false;
   private stopped = false;
@@ -202,10 +171,6 @@ export class MatrixBridge {
 
   get agent(): BridgeAgent | undefined {
     return this.boundAgent;
-  }
-
-  get ownedAgentHandle(): BridgeAgentHandle | undefined {
-    return this.ownedHandle;
   }
 
   /** A detached snapshot of the unconsumed allowed-room context. */
@@ -335,53 +300,18 @@ export class MatrixBridge {
       this.setReadiness({ state: "unbound", workspaceId });
       return true;
     }
-    this.boundSessionId = selected.sessionId;
-    const live = this.deps.agents.get(selected.sessionId);
-    if (live) {
-      this.boundAgent = live;
+    try {
+      if (this.stopped) return false;
+      const resolved = await this.deps.resolveAgent(selected.sessionId);
+      if (this.stopped) return false;
+      if ("error" in resolved) throw resolved.error;
+      this.boundSessionId = selected.sessionId;
+      this.boundAgent = resolved.agent;
       try {
-        this.registerAgentTools(live);
+        this.registerAgentTools(resolved.agent);
       } catch {
         this.boundAgent = undefined;
         this.boundSessionId = undefined;
-        if (!this.stopped) {
-          this.reportError();
-          this.setReadiness({ state: "failed", detail: "tool-registration-failed", workspaceId, sessionId: selected.sessionId });
-        }
-        return false;
-      }
-      return true;
-    }
-    const recordedPreset = selected.inspection.meta.agentPreset;
-    const recordedSelection = recordedModelSelection(selected.inspection);
-    try {
-      if (this.stopped) return false;
-      const resumeOptions: { resumeSessionId: string; setup?: (agentContext: unknown) => Promise<void> } = {
-        resumeSessionId: selected.sessionId
-      };
-      if (recordedPreset && this.deps.agentPresets) {
-        resumeOptions.setup = async (agentContext) => {
-          this.installRecordedModelSelection(agentContext, recordedSelection);
-          await this.deps.agentPresets!.mount(agentContext, recordedPreset);
-        };
-      } else if (recordedSelection) {
-        resumeOptions.setup = async (agentContext) => {
-          this.installRecordedModelSelection(agentContext, recordedSelection);
-        };
-      }
-      const handle = await this.deps.agents.resume(resumeOptions);
-      if (this.stopped) {
-        await handle.dispose();
-        return false;
-      }
-      this.ownedHandle = handle;
-      this.boundAgent = handle.agent;
-      try {
-        this.registerAgentTools(handle.agent);
-      } catch {
-        this.boundAgent = undefined;
-        this.ownedHandle = undefined;
-        try { await handle.dispose(); } catch { if (!this.stopped) this.reportError(); }
         if (!this.stopped) {
           this.reportError();
           this.setReadiness({ state: "failed", detail: "tool-registration-failed", workspaceId, sessionId: selected.sessionId });
@@ -395,19 +325,6 @@ export class MatrixBridge {
       if (!this.stopped) this.setReadiness({ state: "failed", detail: "session-inspection-failed", workspaceId, sessionId: selected.sessionId });
       return false;
     }
-  }
-
-  private installRecordedModelSelection(agentContext: unknown, selection: ModelSelection | undefined): void {
-    if (!selection) return;
-    const context = agentContext as Context & { effect?: (execute: () => unknown, label?: string) => unknown };
-    if (typeof context.effect !== "function") return;
-    // The model-selection helper installs scoped waterfalls. Register its
-    // disposer on the resumed Agent context so unloading the owned handle
-    // cannot leave listeners attached to a dead session.
-    context.effect(
-      () => installModelSelection(context, { current: selection, assembled: undefined }),
-      "dsh-matrix: recorded model selection"
-    );
   }
 
   /** Register the fixed-room tools in the locked Agent's Cordis scope only. */
@@ -631,7 +548,7 @@ export class MatrixBridge {
     }
   }
 
-  /** Stop intake first, then settle queued work and dispose only resumed ownership. */
+  /** Stop intake first, then settle queued work and release bridge-owned resources. */
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
@@ -648,11 +565,6 @@ export class MatrixBridge {
     try { await client?.stopClient?.(); } catch { this.reportError(); }
     await waitWithin(classificationTail, CLASSIFICATION_STOP_TIMEOUT_MS);
     await this.queueTail.catch(() => undefined);
-    if (this.ownedHandle) {
-      const handle = this.ownedHandle;
-      this.ownedHandle = undefined;
-      try { await handle.dispose(); } catch { this.reportError(); }
-    }
     this.boundAgent = undefined;
     this.dedupe.clear();
     this.pendingEventIds.clear();

@@ -2,7 +2,7 @@ import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_pro
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import vm from "node:vm";
 
@@ -41,9 +41,22 @@ function dshExecutable(): string {
   throw new Error("pack-smoke requires the installed DSH CLI (set DSH_CLI to its path)");
 }
 
+interface DshInvocation { command: string; prefix: string[] }
+
+function dshInvocation(entry: string): DshInvocation {
+  const candidate = resolve(dirname(entry), "..", "@deepseek-ai", "dsh", "lib", "bin.js");
+  if (existsSync(candidate)) {
+    let node = process.execPath;
+    try { node = execFileSync("which", ["node"], { encoding: "utf8" }).trim() || node; } catch { /* Bun fallback */ }
+    return { command: node, prefix: ["--expose-internals", candidate] };
+  }
+  return { command: entry, prefix: [] };
+}
+
 async function dshVersion(entry: string, env: NodeJS.ProcessEnv): Promise<void> {
   try {
-    const { stdout } = await run(process.execPath, ["--expose-internals", entry, "--version"], { env });
+    const invocation = dshInvocation(entry);
+    const { stdout } = await run(invocation.command, [...invocation.prefix, "--version"], { env });
     if (stdout.trim() !== "0.1.2-rc.1") throw new Error(`found ${stdout.trim() || "unknown"}`);
   } catch (error) {
     throw new Error(`pack-smoke requires DSH 0.1.2-rc.1: ${String(error)}`);
@@ -72,7 +85,8 @@ function isolatedEnvironment(temp: string, dshHome: string): NodeJS.ProcessEnv {
 }
 
 async function startRuntime(entry: string, env: NodeJS.ProcessEnv, cwd: string): Promise<RuntimeProcess> {
-  const child = spawn(process.execPath, ["--expose-internals", entry, "--profile", "web", "--host", "127.0.0.1", "--port", "0", "--no-open"], {
+  const invocation = dshInvocation(entry);
+  const child = spawn(invocation.command, [...invocation.prefix, "--profile", "web", "--host", "127.0.0.1", "--port", "0", "--no-open"], {
     cwd,
     env,
     stdio: ["ignore", "pipe", "pipe"]
@@ -181,7 +195,8 @@ async function main(): Promise<void> {
     if (!filename) throw new Error("npm pack did not produce an artifact");
     const artifact = join(temp, filename);
 
-    await run(process.execPath, ["--expose-internals", entry, "plugin", "--profile", "web", "add", artifact, "--ignore-scripts"], {
+    const invocation = dshInvocation(entry);
+    await run(invocation.command, [...invocation.prefix, "plugin", "--profile", "web", "add", artifact, "--ignore-scripts"], {
       cwd: runtimeCwd,
       env,
       maxBuffer: 2 * 1024 * 1024
@@ -208,7 +223,7 @@ async function main(): Promise<void> {
       if (name.startsWith("@deepseek-ai/dsh-") && version !== "0.1.2-rc.1") throw new Error(`non-rc DSH devDependency: ${name}@${version}`);
     }
     const patchText = await readFile(join(installed, "cordis.patch.yml"), "utf8");
-    for (const required of ["dsh-matrix", "@lamplitisles/dsh-matrix", "connection", "credentials", "settings", "agents", "agentPresets", "tools", "workspaceRegistry", "sessionController"]) {
+    for (const required of ["dsh-matrix", "@lamplitisles/dsh-matrix", "connection", "credentials", "settings", "tools", "workspaceRegistry", "sessionController"]) {
       if (!patchText.includes(required)) throw new Error(`Cordis patch is missing ${required}`);
     }
 

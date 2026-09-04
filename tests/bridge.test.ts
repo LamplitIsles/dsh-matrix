@@ -22,7 +22,7 @@ function baseDeps(client: FakeClient, agent?: BridgeAgent): BridgeDependencies {
     resolveCredential: async () => ({ value: "secret-token" }),
     workspaceRegistry: { get: () => ({ id: "workspace", sessionIds: ["session"] }), archivedSessionIds: new Set() },
     inspectSession: async () => ({ meta: { id: "session", agentPreset: "default" }, events: [{ type: "user/message", time: 1, data: { source: { kind: "user" } } }] }),
-    agents: { get: () => agent, resume: async () => ({ agent: agent!, dispose: async () => undefined }) },
+    resolveAgent: async () => agent ? { agent } : { error: new Error("agent unavailable") },
     matrixClientFactory: async () => client
   };
 }
@@ -83,7 +83,9 @@ describe("MatrixBridge", () => {
 
   it("does not emit an automatic unbound-room notice", async () => {
     const client = new FakeClient();
-    const bridge = new MatrixBridge(baseDeps(client));
+    const dependencies = baseDeps(client);
+    dependencies.workspaceRegistry = { get: () => ({ id: "workspace", sessionIds: [] }), archivedSessionIds: new Set() };
+    const bridge = new MatrixBridge(dependencies);
     await bridge.start();
     client.emit("sync", "PREPARED");
     client.emit("Room.timeline", matrixEvent("$trigger", "@bot:example answer"), {}, false, false, { timeline: "live" });
