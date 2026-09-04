@@ -38,9 +38,9 @@ function dshExecutable(): string {
 async function dshVersion(entry: string, env: NodeJS.ProcessEnv): Promise<void> {
   try {
     const { stdout } = await run(process.execPath, ["--expose-internals", entry, "--version"], { env });
-    if (stdout.trim() !== "0.1.2-alpha.3") throw new Error(`found ${stdout.trim() || "unknown"}`);
+    if (stdout.trim() !== "0.1.2-rc.1") throw new Error(`found ${stdout.trim() || "unknown"}`);
   } catch (error) {
-    throw new Error(`pack-smoke requires DSH 0.1.2-alpha.3: ${String(error)}`);
+    throw new Error(`pack-smoke requires DSH 0.1.2-rc.1: ${String(error)}`);
   }
 }
 
@@ -188,14 +188,17 @@ async function main(): Promise<void> {
       devDependencies?: Record<string, string>;
       dsh?: { bundle?: { patch?: string }; client?: { platform?: string; inject?: string[] } };
     };
-    if (metadata.name !== "@lamplitisles/dsh-matrix" || metadata.version !== "0.1.2-alpha.3") throw new Error("installed package metadata mismatch");
+    if (metadata.name !== "@lamplitisles/dsh-matrix" || metadata.version !== "0.1.2-rc.1") throw new Error("installed package metadata mismatch");
     if (metadata.dsh?.bundle?.patch !== "./cordis.patch.yml" || metadata.dsh.client?.platform !== "web") throw new Error("installed DSH manifest mismatch");
     if (!metadata.dsh.client.inject?.includes("@deepseek-ai/dsh-client-ui-workspace")) throw new Error("workspace client injection missing");
     if (metadata.peerDependencies?.["@deepseek-ai/cordis"] !== "4.0.2") throw new Error("Cordis peer is not pinned to 4.0.2");
-    if (metadata.peerDependencies?.["@deepseek-ai/dsh-tools"] !== "0.1.2-alpha.3") throw new Error("dsh-tools peer is not pinned to 0.1.2-alpha.3");
-    if (metadata.devDependencies?.["@deepseek-ai/dsh-tools"] !== "0.1.2-alpha.3") throw new Error("dsh-tools devDependency is not pinned to 0.1.2-alpha.3");
+    if (metadata.peerDependencies?.["@deepseek-ai/dsh-tools"] !== "0.1.2-rc.1") throw new Error("dsh-tools peer is not pinned to 0.1.2-rc.1");
+    if (metadata.devDependencies?.["@deepseek-ai/dsh-tools"] !== "0.1.2-rc.1") throw new Error("dsh-tools devDependency is not pinned to 0.1.2-rc.1");
     for (const [name, version] of Object.entries(metadata.peerDependencies ?? {})) {
-      if (name.startsWith("@deepseek-ai/dsh-") && version !== "0.1.2-alpha.3") throw new Error(`non-alpha DSH peer: ${name}@${version}`);
+      if (name.startsWith("@deepseek-ai/dsh-") && version !== "0.1.2-rc.1") throw new Error(`non-rc DSH peer: ${name}@${version}`);
+    }
+    for (const [name, version] of Object.entries(metadata.devDependencies ?? {})) {
+      if (name.startsWith("@deepseek-ai/dsh-") && version !== "0.1.2-rc.1") throw new Error(`non-rc DSH devDependency: ${name}@${version}`);
     }
     const patchText = await readFile(join(installed, "cordis.patch.yml"), "utf8");
     for (const required of ["dsh-matrix", "@lamplitisles/dsh-matrix", "connection", "credentials", "settings", "agents", "agentPresets", "tools", "workspaceRegistry", "sessionController"]) {
