@@ -1,13 +1,13 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { checkPackedManifests, checkReleaseManifests, npmDistTag, versionFromTag } from "./release-shared.js";
+import { checkPackedManifest, checkReleaseManifest, npmDistTag, versionFromTag } from "./release-shared.js";
 
 export { npmDistTag, versionFromTag } from "./release-shared.js";
 
 export function releaseCheck(root: string, tag: string, checkPacked = true): string[] {
-  const errors = checkReleaseManifests(root, tag);
-  if (checkPacked) errors.push(...checkPackedManifests(root));
+  const errors = checkReleaseManifest(root, tag);
+  if (checkPacked) errors.push(...checkPackedManifest(root));
   return errors;
 }
 

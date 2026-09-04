@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export const PACKAGE_NAME = "@lamplitisles/dsh-matrix" as const;
-export const PACKAGE_DIRECTORY = "." as const;
 export const REPOSITORY_URL = "https://github.com/LamplitIsles/dsh-matrix.git" as const;
 export const REQUIRED_PACKED_FILES = [
   "dist/index.js",
@@ -16,19 +15,21 @@ export const REQUIRED_PACKED_FILES = [
   "THIRD_PARTY_NOTICES.md"
 ] as const;
 
-export const PUBLIC_PACKAGE = {
-  directory: PACKAGE_DIRECTORY,
-  name: PACKAGE_NAME,
-  requiredFiles: REQUIRED_PACKED_FILES
-} as const;
-
-export const PUBLIC_PACKAGES = [PUBLIC_PACKAGE] as const;
-
-const tagPattern = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
+const numericIdentifier = "(?:0|[1-9]\\d*)";
+const nonNumericIdentifier = "(?:\\d*[A-Za-z-][0-9A-Za-z-]*)";
+const prereleaseIdentifier = `(?:${numericIdentifier}|${nonNumericIdentifier})`;
+const buildIdentifier = "(?:[0-9A-Za-z-]+)";
+const tagPattern = new RegExp(
+  `^v${numericIdentifier}\\.${numericIdentifier}\\.${numericIdentifier}`
+    + `(?:-(${prereleaseIdentifier}(?:\\.${prereleaseIdentifier})*))?`
+    + `(?:\\+${buildIdentifier}(?:\\.${buildIdentifier})*)?$`,
+  "u"
+);
 
 /** Return the exact package version represented by a release tag. */
 export function versionFromTag(tag: string): string {
-  if (!tagPattern.test(tag)) {
+  const match = tagPattern.exec(tag);
+  if (!match) {
     throw new Error("Release tags must use v<semver>, for example v0.1.0 or v0.1.0-beta.1.");
   }
   return tag.slice(1);
@@ -144,16 +145,6 @@ export function checkPackedManifest(root: string): string[] {
     errors.push(`${PACKAGE_NAME} packed manifest contains an unsafe build artifact.`);
   }
   return errors;
-}
-
-// Plural aliases keep the helper vocabulary consistent with the other public
-// package release workflows while retaining the single-package implementation.
-export function checkReleaseManifests(root: string, tag: string): string[] {
-  return checkReleaseManifest(root, tag);
-}
-
-export function checkPackedManifests(root: string): string[] {
-  return checkPackedManifest(root);
 }
 
 /** Create the exact tarball that the publish job uploads and later publishes. */

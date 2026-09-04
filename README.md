@@ -237,31 +237,53 @@ cleanup of an uploaded-but-unsent object.
 ## Maintainer release setup
 
 The tag-only workflow in `.github/workflows/release.yml` verifies the exact
-package that it publishes. Before the first automated release, a maintainer
-must:
+package that it publishes. Before the first automated release, bootstrap a
+distinct prerelease and then prepare the first stable release:
 
 1. Create or confirm the public `@lamplitisles` npm scope and manually publish
-   the initial `@lamplitisles/dsh-matrix` beta package from a maintainer
-   workstation (after building, run `npm publish --access public --tag beta`).
-2. Configure npm Trusted Publishing for `@lamplitisles/dsh-matrix`, GitHub
-   repository `LamplitIsles/dsh-matrix`, workflow
-   `.github/workflows/release.yml`, and the protected GitHub `npm` environment.
-3. Create the protected GitHub `npm` environment with the required release
-   approval policy.
+   the distinct prerelease `@lamplitisles/dsh-matrix@0.1.0-beta.0` from a
+   maintainer workstation using local npm authentication. Set `version` in
+   `package.json` to `0.1.0-beta.0`, then run the same local checks used by the
+   workflow:
 
-For a routine release, update `version` in `package.json`, run the local checks,
-and create a matching semantic version tag:
+   ```sh
+   bun install --frozen-lockfile
+   bun run typecheck
+   bun run test
+   bun run build
+   GITHUB_REF_NAME=v0.1.0-beta.0 bun run release:check
+   bun run pack-smoke
+   npm publish --access public --tag beta
+   ```
 
-```sh
-bun install --frozen-lockfile
-bun run typecheck
-bun run test
-bun run build
-GITHUB_REF_NAME=v0.1.0 bun run release:check
-bun run pack-smoke
-git tag v0.1.0
-git push origin v0.1.0
-```
+   This bootstrap publication deliberately has no git release tag and is a
+   different npm version from the later stable `0.1.0`; do not manually publish
+   or reuse `0.1.0` for the beta.
+2. After the beta checks and publication succeed, configure npm Trusted
+   Publishing for `@lamplitisles/dsh-matrix` with GitHub repository
+   `LamplitIsles/dsh-matrix`, workflow `.github/workflows/release.yml`, and
+   environment `npm`. Create that protected GitHub `npm` environment with the
+   required release approval policy.
+3. Change `version` in `package.json` to `0.1.0` and commit the change before
+   creating the first OIDC stable tag. Run the stable local checks, push the
+   committed version with `og push`, and create the release tag with the
+   repository-authorized command `og tag v0.1.0` (`og tag --help` documents this
+   as “Create and push a tag”):
+
+   ```sh
+   bun install --frozen-lockfile
+   bun run typecheck
+   bun run test
+   bun run build
+   GITHUB_REF_NAME=v0.1.0 bun run release:check
+   bun run pack-smoke
+   og push
+   og tag v0.1.0
+   ```
+
+For each subsequent release, update `version` in `package.json`, commit the
+change, rerun the local checks above with the matching `GITHUB_REF_NAME`, then
+run `og push` followed by `og tag v<version>`.
 
 Tags must be `v<semver>` (for example `v0.1.0` or `v0.1.0-beta.1`) and must
 match the package version exactly. Stable tags publish with npm's `latest`
