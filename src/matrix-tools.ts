@@ -1,5 +1,6 @@
 import { defineTool, type ToolDefinition, type ToolRunContext } from "@deepseek-ai/dsh-tools";
 import {
+  MAX_MATRIX_MEDIA_BYTES,
   MAX_MATRIX_TOOL_BODY_CHARS,
   MAX_PROMPT_CHARS,
   MAX_PROVENANCE_CHARS,
@@ -13,6 +14,7 @@ import {
   matrixEventSender,
   matrixEventType,
   matrixMemberDisplayName,
+  matrixMediaMessage,
   matrixTextMessage,
   readLocalRoomDisplayName,
   type MatrixContextRecord,
@@ -24,7 +26,9 @@ import {
 export const MATRIX_LIST_MEMBERS = "matrix_list_members" as const;
 export const MATRIX_READ_RECENT_MESSAGES = "matrix_read_recent_messages" as const;
 export const MATRIX_SEND_MESSAGE = "matrix_send_message" as const;
+export const MATRIX_SEND_FILE = "matrix_send_file" as const;
 export const MAX_RECENT_MESSAGES = 50;
+export { MAX_MATRIX_MEDIA_BYTES };
 const MAX_RECENT_HISTORY_PAGES = 16;
 
 export interface MatrixToolDependencies {
@@ -34,6 +38,32 @@ export interface MatrixToolDependencies {
   roomId: string;
   /** The bridge gate; tools are unavailable before prepared sync or after failure. */
   isReady: () => boolean;
+  /** Read the live locked Agent so optional DSH services are resolved per call. */
+  getAgent?: () => MatrixToolAgentLike | undefined;
+}
+
+/** The small DSH filesystem seam used by workspace-file delivery. */
+export interface MatrixFileSystemLike {
+  resolve: (path: string, options?: { cwd?: string; signal?: AbortSignal }) => Promise<unknown>;
+  contains: (parent: unknown, child: unknown) => boolean;
+  stat: (target: unknown, signal?: AbortSignal) => Promise<{ type?: unknown; size?: unknown } | undefined>;
+  readBytes: (target: unknown, signal: AbortSignal | undefined, maxBytes: number) => Promise<Uint8Array>;
+}
+
+/** Exact optional service contract recorded with the paired Kepos TTS worker. */
+export interface KeposTtsServiceLike {
+  synthesize: (
+    request: { sessionId: string; text: string },
+    signal?: AbortSignal
+  ) => Promise<{ mediaType: "audio/mpeg"; data: Uint8Array }>;
+}
+
+export interface MatrixToolAgentLike {
+  id: unknown;
+  session?: { header?: { cwd?: unknown } };
+  ctx?: {
+    get?: (name: string) => unknown;
+  };
 }
 
 export interface MatrixRoomMember {
@@ -53,8 +83,14 @@ export interface MatrixSendMessageResult {
   sent: true;
 }
 
+export interface MatrixSendFileResult {
+  sent: true;
+}
+
 class MatrixMentionCorrectionError extends Error {}
 class MatrixReplyTargetError extends Error {}
+class MatrixMediaError extends Error {}
+class MatrixFileError extends Error {}
 
 function abortError(): Error {
   return new Error("Matrix tool operation cancelled.");
@@ -70,6 +106,42 @@ function notReadyError(): Error {
 
 function sendFailureError(): Error {
   return new Error("Matrix message could not be sent.");
+}
+
+function voiceUnavailableError(): Error {
+  return new MatrixMediaError("Matrix voice delivery is unavailable: the optional Kepos TTS service is not mounted.");
+}
+
+function voiceSynthesisError(): Error {
+  return new MatrixMediaError("Matrix voice synthesis returned invalid audio.");
+}
+
+function mediaUploadError(): Error {
+  return new MatrixMediaError("Matrix media upload failed.");
+}
+
+function filePathError(): Error {
+  return new MatrixFileError("Matrix file path must be one non-empty path inside the active workspace.");
+}
+
+function fileWorkspaceError(): Error {
+  return new MatrixFileError("Matrix file delivery is unavailable: the active workspace filesystem is unavailable.");
+}
+
+function fileContainmentError(): Error {
+  return new MatrixFileError("Matrix file path must stay inside the active conversation workspace.");
+}
+
+function fileRegularError(): Error {
+  return new MatrixFileError("Matrix file path must identify a regular file.");
+}
+
+function fileTooLargeError(): Error {
+  return new MatrixFileError(`Matrix file exceeds the ${MAX_MATRIX_MEDIA_BYTES}-byte media limit.`);
+}
+
+function fileReadError(): Error {
+  return new MatrixFileError("Matrix file could not be read from the active workspace.");
 }
 
 function replyTargetError(eventId: unknown): Error {
@@ -208,6 +280,189 @@ function validMessageBody(body: unknown): body is string {
   return typeof body === "string" && body.trim().length > 0 && body.length <= MAX_MATRIX_TOOL_BODY_CHARS;
 }
 
+function agentService(agent: MatrixToolAgentLike | undefined, name: string): unknown {
+  if (!agent?.ctx) return undefined;
+  try {
+    const value = agent.ctx.get?.(name);
+    if (value !== undefined) return value;
+  } catch {
+    // Optional services may disappear with their provider fiber.
+  }
+  try {
+    return (agent.ctx as unknown as Record<string, unknown>)[name];
+  } catch {
+    return undefined;
+  }
+}
+
+function liveAgent(deps: MatrixToolDependencies, exec?: ToolRunContext): MatrixToolAgentLike | undefined {
+  const executionAgent = exec?.agent;
+  if (executionAgent) return executionAgent as unknown as MatrixToolAgentLike;
+  try {
+    return deps.getAgent?.();
+  } catch {
+    return undefined;
+  }
+}
+
+function matrixFileSystem(agent: MatrixToolAgentLike | undefined): MatrixFileSystemLike | undefined {
+  const candidate = agentService(agent, "fs");
+  if (!candidate || typeof candidate !== "object") return undefined;
+  const value = candidate as Partial<MatrixFileSystemLike>;
+  if (typeof value.resolve !== "function"
+    || typeof value.contains !== "function"
+    || typeof value.stat !== "function"
+    || typeof value.readBytes !== "function") return undefined;
+  return value as MatrixFileSystemLike;
+}
+
+function workspaceCwd(agent: MatrixToolAgentLike | undefined): string | undefined {
+  const cwd = agent?.session?.header?.cwd;
+  return typeof cwd === "string" && cwd.trim() ? cwd : undefined;
+}
+
+function basenameForPath(path: string): string {
+  const normalized = path.replace(/[\\/]+$/, "");
+  const last = normalized.split(/[\\/]/).pop() ?? "";
+  return last || normalized;
+}
+
+function validFilePath(path: unknown): path is string {
+  return typeof path === "string"
+    && path.length > 0
+    && path.length <= MAX_MATRIX_TOOL_BODY_CHARS
+    && path.trim().length > 0
+    && !path.includes("\0")
+    && !/^[a-z][a-z0-9+.-]*:\/\//i.test(path);
+}
+
+function validDescription(description: unknown): description is string {
+  return typeof description === "string"
+    && description.length <= MAX_MATRIX_TOOL_BODY_CHARS;
+}
+
+function imageMediaType(filename: string): string | undefined {
+  switch (filename.toLowerCase().split(".").pop()) {
+    case "png": return "image/png";
+    case "jpg":
+    case "jpeg": return "image/jpeg";
+    case "webp": return "image/webp";
+    case "gif": return "image/gif";
+    default: return undefined;
+  }
+}
+
+function mediaTypeForFilename(filename: string): { msgtype: "m.image" | "m.file"; mimeType: string } {
+  const imageType = imageMediaType(filename);
+  return imageType
+    ? { msgtype: "m.image", mimeType: imageType }
+    : { msgtype: "m.file", mimeType: "application/octet-stream" };
+}
+
+function validAudio(value: unknown): value is { mediaType: "audio/mpeg"; data: Uint8Array } {
+  if (!value || typeof value !== "object") return false;
+  const result = value as { mediaType?: unknown; data?: unknown };
+  return result.mediaType === "audio/mpeg"
+    && result.data instanceof Uint8Array
+    && result.data.byteLength > 0
+    && result.data.byteLength <= MAX_MATRIX_MEDIA_BYTES;
+}
+
+function safeContentUri(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_PROVENANCE_CHARS;
+}
+
+async function uploadMatrixMedia(
+  client: MatrixClientLike,
+  data: Uint8Array,
+  name: string,
+  mimeType: string,
+  signal: AbortSignal
+): Promise<string> {
+  ensureNotAborted(signal);
+  if (typeof client.uploadContent !== "function") throw mediaUploadError();
+  const abortController = new AbortController();
+  const onAbort = () => abortController.abort();
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    const uploaded = await client.uploadContent(data, {
+      name,
+      type: mimeType,
+      abortController
+    });
+    ensureNotAborted(signal);
+    const uri = uploaded?.content_uri;
+    if (!safeContentUri(uri)) throw mediaUploadError();
+    return uri;
+  } catch (error) {
+    if (signal.aborted) throw abortError();
+    if (error instanceof MatrixMediaError) throw error;
+    throw mediaUploadError();
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+async function sendMatrixContent(
+  client: MatrixClientLike,
+  roomId: string,
+  content: Record<string, unknown>
+): Promise<void> {
+  try {
+    if (client.sendMessage) {
+      await client.sendMessage(roomId, content);
+      return;
+    }
+    if (client.sendEvent) {
+      await client.sendEvent(roomId, "m.room.message", content);
+      return;
+    }
+    throw sendFailureError();
+  } catch (error) {
+    if (error instanceof Error && error.message === "Matrix message could not be sent.") throw error;
+    throw sendFailureError();
+  }
+}
+
+async function resolveWorkspaceFile(
+  agent: MatrixToolAgentLike | undefined,
+  path: unknown,
+  signal: AbortSignal
+): Promise<{ data: Uint8Array; filename: string }> {
+  if (!validFilePath(path)) throw filePathError();
+  const fs = matrixFileSystem(agent);
+  const cwd = workspaceCwd(agent);
+  if (!fs || !cwd) throw fileWorkspaceError();
+  ensureNotAborted(signal);
+  let root: unknown;
+  let target: unknown;
+  try {
+    root = await fs.resolve(cwd, { cwd, signal });
+    target = await fs.resolve(path, { cwd, signal });
+    ensureNotAborted(signal);
+    if (!fs.contains(root, target)) throw fileContainmentError();
+    const info = await fs.stat(target, signal);
+    ensureNotAborted(signal);
+    if (!info || info.type !== "file") throw fileRegularError();
+    if (typeof info.size === "number" && (!Number.isFinite(info.size) || info.size < 0)) throw fileReadError();
+    if (typeof info.size === "number" && info.size > MAX_MATRIX_MEDIA_BYTES) throw fileTooLargeError();
+    const data = await fs.readBytes(target, signal, MAX_MATRIX_MEDIA_BYTES);
+    ensureNotAborted(signal);
+    if (!(data instanceof Uint8Array)) throw fileReadError();
+    if (data.byteLength > MAX_MATRIX_MEDIA_BYTES) throw fileTooLargeError();
+    const displayPath = target && typeof target === "object" && typeof (target as { displayPath?: unknown }).displayPath === "string"
+      ? (target as { displayPath: string }).displayPath
+      : path;
+    const filename = basenameForPath(displayPath);
+    if (!filename || filename === "." || filename === "..") throw filePathError();
+    return { data, filename };
+  } catch (error) {
+    if (signal.aborted) throw abortError();
+    if (error instanceof MatrixFileError) throw error;
+    throw fileReadError();
+  }
+}
+
 function validRecentLimit(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_RECENT_MESSAGES;
 }
@@ -332,7 +587,7 @@ function resolveMentionLabelsFromRoster(roster: readonly MatrixRoomMember[], lab
   return userIds;
 }
 
-/** Build exactly the three native definitions for one locked Companion scope. */
+/** Build exactly the four native definitions for one locked Companion scope. */
 export function createMatrixToolDefinitions(deps: MatrixToolDependencies): readonly ToolDefinition[] {
   const listTool = defineTool({
     name: MATRIX_LIST_MEMBERS,
@@ -413,9 +668,10 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
 
   const sendTool = defineTool({
     name: MATRIX_SEND_MESSAGE,
-    description: `Send one bounded plain-text message to the configured allowed Matrix room (maximum ${MAX_MATRIX_TOOL_BODY_CHARS} characters). Optional replyToEventId must identify a message in that room's server history; optional mentions must exactly match current room display labels.`,
+    description: `Send one bounded message to the configured allowed Matrix room (maximum ${MAX_MATRIX_TOOL_BODY_CHARS} characters). By default this is one m.text event; set voice=true to synthesize and send one audio-only m.audio event named 语音消息.mp3. Optional replyToEventId must identify a message in that room's server history; optional mentions must exactly match current room display labels.`,
     parameters: {
-      body: { type: "string", required: true, description: "Plain-text message body." },
+      body: { type: "string", required: true, description: "Plain-text body, or the text to synthesize when voice is true." },
+      voice: { type: "boolean", description: "When true, send one audio message through the optional Kepos TTS service." },
       replyToEventId: { type: "string", description: "Optional event ID from the configured room's history to reply to." },
       mentions: {
         type: "array",
@@ -435,16 +691,20 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
       const signal = toolSignal(exec);
       ensureNotAborted(signal);
       ensureReady(deps);
-      const body = (args as { body?: unknown } | undefined)?.body;
+      const record = args as { body?: unknown; voice?: unknown; mentions?: unknown; replyToEventId?: unknown } | undefined;
+      const body = record?.body;
       if (!validMessageBody(body)) {
         throw new Error(`Matrix message body must be non-empty and at most ${MAX_MATRIX_TOOL_BODY_CHARS} characters.`);
+      }
+      if (record?.voice !== undefined && typeof record.voice !== "boolean") {
+        throw new Error("Matrix voice option must be a boolean.");
       }
       try {
         ensureReady(deps);
         const client = deps.getClient();
         if (!client || !deps.roomId.trim()) throw unavailableError();
-        const rawMentions = (args as { mentions?: unknown } | undefined)?.mentions;
-        const requestedReplyToEventId = (args as { replyToEventId?: unknown } | undefined)?.replyToEventId;
+        const rawMentions = record?.mentions;
+        const requestedReplyToEventId = record?.replyToEventId;
         const replyToEventId = requestedReplyToEventId === undefined
           ? undefined
           : await verifyReplyTarget(client, deps.roomId, requestedReplyToEventId, signal);
@@ -466,14 +726,43 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
           // IDs and labels in one coherent local roster snapshot.
           mentionUserIds = resolveMentionLabelsFromRoster(currentRoster, rawMentions);
         }
-        const content = matrixTextMessage(deps.roomId, body, replyToEventId, mentionUserIds);
-        if (client.sendMessage) {
-          await client.sendMessage(deps.roomId, content);
-        } else if (client.sendEvent) {
-          await client.sendEvent(deps.roomId, "m.room.message", content);
-        } else {
-          throw sendFailureError();
+
+        if (record?.voice === true) {
+          const agent = liveAgent(deps, exec);
+          const service = agentService(agent, "keposTts");
+          if (!service || typeof service !== "object" || typeof (service as { synthesize?: unknown }).synthesize !== "function") {
+            throw voiceUnavailableError();
+          }
+          const sessionId = typeof agent?.id === "string" ? agent.id : String(agent?.id ?? "");
+          if (!sessionId) throw voiceUnavailableError();
+          let synthesized: unknown;
+          try {
+            synthesized = await (service as KeposTtsServiceLike).synthesize({ sessionId, text: body }, signal);
+          } catch (error) {
+            if (signal.aborted) throw abortError();
+            throw voiceSynthesisError();
+          }
+          ensureNotAborted(signal);
+          ensureReady(deps);
+          if (!validAudio(synthesized)) throw voiceSynthesisError();
+          const audio = synthesized as { mediaType: "audio/mpeg"; data: Uint8Array };
+          const url = await uploadMatrixMedia(client, audio.data, "语音消息.mp3", audio.mediaType, signal);
+          ensureNotAborted(signal);
+          ensureReady(deps);
+          const content = matrixMediaMessage("m.audio", "语音消息.mp3", url, audio.mediaType, audio.data.byteLength, {
+            replyToEventId,
+            mentionUserIds
+          });
+          await sendMatrixContent(client, deps.roomId, content);
+          ensureNotAborted(signal);
+          ensureReady(deps);
+          return { sent: true };
         }
+
+        const content = matrixTextMessage(deps.roomId, body, replyToEventId, mentionUserIds);
+        ensureNotAborted(signal);
+        ensureReady(deps);
+        await sendMatrixContent(client, deps.roomId, content);
         ensureNotAborted(signal);
         ensureReady(deps);
         return { sent: true };
@@ -482,11 +771,74 @@ export function createMatrixToolDefinitions(deps: MatrixToolDependencies): reado
         if (error instanceof Error && error.message === "Matrix bridge is not ready: initial sync is not prepared.") throw error;
         if (error instanceof MatrixMentionCorrectionError) throw error;
         if (error instanceof MatrixReplyTargetError) throw error;
+        if (error instanceof MatrixMediaError) throw error;
         if (error instanceof Error && (error.message === "Matrix message could not be sent." || error.message === "Matrix connection or the configured room is unavailable.")) throw error;
         throw sendFailureError();
       }
     }
   });
 
-  return [listTool, recentTool, sendTool];
+  const fileTool = defineTool({
+    name: MATRIX_SEND_FILE,
+    description: `Send one regular file from the active conversation workspace to the configured allowed Matrix room. PNG, JPEG, WebP, and GIF files become m.image; all other files become m.file with application/octet-stream. Optional description becomes the visible Matrix body, otherwise the basename is used. Maximum ${MAX_MATRIX_MEDIA_BYTES} bytes; optional replyToEventId must identify a message in that room's server history.`,
+    parameters: {
+      path: { type: "string", required: true, description: "One path inside the active conversation workspace." },
+      description: { type: "string", description: "Optional visible Matrix body for the file event." },
+      replyToEventId: { type: "string", description: "Optional event ID from the configured room's history to reply to." }
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { sent: { type: "boolean", const: true, required: true } }
+      },
+      render: (_args, value) => toolText(value.sent ? "Matrix file sent." : "Matrix file was not sent.")
+    },
+    async execute(args, exec): Promise<MatrixSendFileResult> {
+      const signal = toolSignal(exec);
+      ensureNotAborted(signal);
+      ensureReady(deps);
+      const record = args as { path?: unknown; description?: unknown; replyToEventId?: unknown } | undefined;
+      const path = record?.path;
+      if (!validFilePath(path)) throw filePathError();
+      const description = record?.description;
+      if (description !== undefined && !validDescription(description)) {
+        throw new MatrixFileError(`Matrix file description must be at most ${MAX_MATRIX_TOOL_BODY_CHARS} characters.`);
+      }
+      try {
+        ensureReady(deps);
+        const client = deps.getClient();
+        if (!client || !deps.roomId.trim()) throw unavailableError();
+        const requestedReplyToEventId = record?.replyToEventId;
+        const replyToEventId = requestedReplyToEventId === undefined
+          ? undefined
+          : await verifyReplyTarget(client, deps.roomId, requestedReplyToEventId, signal);
+        const resolved = await resolveWorkspaceFile(liveAgent(deps, exec), path, signal);
+        ensureReady(deps);
+        const visibleBody = description === undefined ? resolved.filename : description;
+        const media = mediaTypeForFilename(resolved.filename);
+        const url = await uploadMatrixMedia(client, resolved.data, resolved.filename, media.mimeType, signal);
+        ensureNotAborted(signal);
+        ensureReady(deps);
+        const content = matrixMediaMessage(media.msgtype, visibleBody, url, media.mimeType, resolved.data.byteLength, {
+          filename: resolved.filename,
+          replyToEventId
+        });
+        await sendMatrixContent(client, deps.roomId, content);
+        ensureNotAborted(signal);
+        ensureReady(deps);
+        return { sent: true };
+      } catch (error) {
+        if (signal.aborted) throw abortError();
+        if (error instanceof Error && error.message === "Matrix bridge is not ready: initial sync is not prepared.") throw error;
+        if (error instanceof MatrixReplyTargetError) throw error;
+        if (error instanceof MatrixFileError) throw error;
+        if (error instanceof MatrixMediaError) throw error;
+        if (error instanceof Error && (error.message === "Matrix message could not be sent." || error.message === "Matrix connection or the configured room is unavailable.")) throw error;
+        throw fileReadError();
+      }
+    }
+  });
+
+  return [listTool, recentTool, sendTool, fileTool];
 }

@@ -42,6 +42,11 @@ export interface MatrixClientLike {
   removeListener?: (event: string, listener: (...args: any[]) => void) => unknown;
   sendMessage?: (roomId: string, content: Record<string, unknown>) => Promise<unknown>;
   sendEvent?: (roomId: string, type: string, content: Record<string, unknown>) => Promise<unknown>;
+  uploadContent?: (data: Uint8Array, options?: {
+    name?: string;
+    type?: string;
+    abortController?: AbortController;
+  }) => Promise<{ content_uri?: unknown }>;
   getRoom?: (roomId: string) => MatrixRoomLike | null | undefined;
   /** Matrix /messages, used only by the bounded recent-message tool. */
   createMessagesRequest?: (roomId: string, fromToken: string | null, limit: number, direction: "b") => Promise<{
@@ -428,5 +433,29 @@ export function matrixTextMessage(
     body,
     ...(replyToEventId ? { "m.relates_to": { "m.in_reply_to": { event_id: replyToEventId } } } : {}),
     ...(mentionUserIds && mentionUserIds.length > 0 ? { "m.mentions": { user_ids: [...mentionUserIds] } } : {})
+  };
+}
+
+/** Build one native Matrix media payload while retaining the fixed-room reply/mention metadata. */
+export function matrixMediaMessage(
+  msgtype: "m.audio" | "m.image" | "m.file",
+  body: string,
+  url: string,
+  mimeType: string,
+  size: number,
+  options: {
+    filename?: string | undefined;
+    replyToEventId?: string | undefined;
+    mentionUserIds?: readonly string[] | undefined;
+  } = {}
+): Record<string, unknown> {
+  return {
+    msgtype,
+    body,
+    url,
+    ...(options.filename ? { filename: options.filename } : {}),
+    info: { mimetype: mimeType, size },
+    ...(options.replyToEventId ? { "m.relates_to": { "m.in_reply_to": { event_id: options.replyToEventId } } } : {}),
+    ...(options.mentionUserIds && options.mentionUserIds.length > 0 ? { "m.mentions": { user_ids: [...options.mentionUserIds] } } : {})
   };
 }

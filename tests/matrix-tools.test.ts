@@ -5,7 +5,8 @@ import {
   readRecentMatrixMessages,
   MATRIX_LIST_MEMBERS,
   MATRIX_READ_RECENT_MESSAGES,
-  MATRIX_SEND_MESSAGE
+  MATRIX_SEND_MESSAGE,
+  MATRIX_SEND_FILE
 } from "../src/matrix-tools.js";
 import { MAX_MATRIX_TOOL_BODY_CHARS, MAX_PROMPT_CHARS, MAX_ROOM_MEMBERS } from "../src/constants.js";
 import type { MatrixClientLike } from "../src/matrix-protocol.js";
@@ -291,15 +292,25 @@ describe("fixed-room Matrix tools", () => {
     await expect(broken.execute({}, execution())).rejects.not.toThrow("secret token");
   });
 
-  it("exposes exactly the three native names and no room parameter", () => {
+  it("exposes exactly the four native names and no room parameter", () => {
     const tools = definitions({});
-    expect(tools.map((tool) => tool.name)).toEqual([MATRIX_LIST_MEMBERS, MATRIX_READ_RECENT_MESSAGES, MATRIX_SEND_MESSAGE]);
+    expect(tools.map((tool) => tool.name)).toEqual([MATRIX_LIST_MEMBERS, MATRIX_READ_RECENT_MESSAGES, MATRIX_SEND_MESSAGE, MATRIX_SEND_FILE]);
     expect(tools[0]!.parameters).toMatchObject({ type: "object", properties: {} });
     expect(tools[2]!.parameters).toMatchObject({
       type: "object",
-      properties: { body: { type: "string" }, mentions: { type: "array", items: { type: "string" } } },
+      properties: { body: { type: "string" }, voice: { type: "boolean" }, mentions: { type: "array", items: { type: "string" } } },
       required: ["body"]
     });
     expect(tools[2]!.parameters).not.toHaveProperty("roomId");
+    expect(tools[3]!.parameters).toMatchObject({
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        description: { type: "string" },
+        replyToEventId: { type: "string" }
+      },
+      required: ["path"]
+    });
+    expect(tools[3]!.parameters).not.toHaveProperty("roomId");
   });
 });

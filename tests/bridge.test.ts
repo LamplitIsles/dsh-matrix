@@ -4,7 +4,7 @@ import type { UserMessage } from "@deepseek-ai/dsh-llm";
 import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 import { MatrixBridge, bridgeRpcHandler, type BridgeAgent, type BridgeDependencies } from "../src/bridge.js";
 import type { MatrixEventLike, MatrixRoomLike } from "../src/matrix-protocol.js";
-import { MATRIX_LIST_MEMBERS, MATRIX_READ_RECENT_MESSAGES, MATRIX_SEND_MESSAGE } from "../src/matrix-tools.js";
+import { MATRIX_LIST_MEMBERS, MATRIX_READ_RECENT_MESSAGES, MATRIX_SEND_MESSAGE, MATRIX_SEND_FILE } from "../src/matrix-tools.js";
 
 class FakeClient extends EventEmitter {
   readonly sent: Array<{ roomId: string; content: Record<string, unknown> }> = [];
@@ -32,19 +32,20 @@ function matrixEvent(id: string, body: string, sender = "@human:example") {
 }
 
 describe("MatrixBridge", () => {
-  it("registers only the active Companion's three fixed-target tools and scoped policy", async () => {
+  it("registers only the active Companion's four fixed-target tools and scoped policy", async () => {
     const client = new FakeClient();
     const registered: ToolDefinition[] = [];
     const disposed: string[] = [];
     const agent: BridgeAgent = { id: "session" as never, ctx: { tools: { register: (tool: ToolDefinition) => { registered.push(tool); return () => disposed.push(tool.name); } }, systemPrompt: { section: (section: { name: string }) => { disposed.push(`policy:${section.name}`); return () => undefined; } } } as never, followup: () => undefined, whenIdle: async () => undefined };
     const bridge = new MatrixBridge(baseDeps(client, agent));
     await bridge.start();
-    expect(registered.map((tool) => tool.name)).toEqual([MATRIX_LIST_MEMBERS, MATRIX_READ_RECENT_MESSAGES, MATRIX_SEND_MESSAGE]);
+    expect(registered.map((tool) => tool.name)).toEqual([MATRIX_LIST_MEMBERS, MATRIX_READ_RECENT_MESSAGES, MATRIX_SEND_MESSAGE, MATRIX_SEND_FILE]);
     client.emit("sync", "PREPARED");
     await registered[2]!.execute({ body: "hello" }, { signal: new AbortController().signal } as never);
     expect(client.sent[0]).toMatchObject({ roomId: "!allowed:example", content: { body: "hello" } });
     await bridge.stop();
     expect(disposed).toContain("matrix_send_message");
+    expect(disposed).toContain("matrix_send_file");
     expect(disposed).toContain("policy:dsh-matrix:companion-policy");
   });
 
