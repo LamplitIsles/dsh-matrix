@@ -32,6 +32,38 @@ function matrixEvent(id: string, body: string, sender = "@human:example") {
 }
 
 describe("MatrixBridge", () => {
+  it("resolves the selected conversation once through the shared controller", async () => {
+    const client = new FakeClient();
+    const agent: BridgeAgent = { id: "newer" as never, followup: () => undefined, whenIdle: async () => undefined };
+    const dependencies = baseDeps(client, agent);
+    dependencies.workspaceRegistry = { get: () => ({ id: "workspace", sessionIds: ["older", "newer"] }), archivedSessionIds: new Set() };
+    dependencies.inspectSession = async (sessionId) => ({ meta: { id: sessionId }, events: [{ type: "user/message", time: sessionId === "newer" ? 2 : 1, data: { source: { kind: "user" } } }] });
+    const resolvedSessionIds: string[] = [];
+    dependencies.resolveAgent = async (sessionId) => { resolvedSessionIds.push(sessionId); return { agent }; };
+    const bridge = new MatrixBridge(dependencies);
+
+    await Promise.all([bridge.start(), bridge.start()]);
+
+    expect(resolvedSessionIds).toEqual(["newer"]);
+    expect(bridge.agent).toBe(agent);
+    await bridge.stop();
+  });
+
+  it("does not start Matrix when shared Agent resolution fails", async () => {
+    const client = new FakeClient();
+    const dependencies = baseDeps(client);
+    let matrixStarts = 0;
+    dependencies.matrixClientFactory = async () => { matrixStarts += 1; return client; };
+    const bridge = new MatrixBridge(dependencies);
+
+    await bridge.start();
+
+    expect(bridge.readiness).toMatchObject({ state: "failed", sessionId: "session" });
+    expect(matrixStarts).toBe(0);
+    expect(bridge.matrixClient).toBeUndefined();
+    await bridge.stop();
+  });
+
   it("registers only the active Companion's four fixed-target tools and scoped policy", async () => {
     const client = new FakeClient();
     const registered: ToolDefinition[] = [];

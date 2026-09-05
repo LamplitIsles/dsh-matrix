@@ -44,7 +44,11 @@ function dshExecutable(): string {
 interface DshInvocation { command: string; prefix: string[] }
 
 function dshInvocation(entry: string): DshInvocation {
-  const candidate = resolve(dirname(entry), "..", "@deepseek-ai", "dsh", "lib", "bin.js");
+  const directEntry = resolve(entry);
+  const packageEntrySuffix = join("@deepseek-ai", "dsh", "lib", "bin.js");
+  const candidate = directEntry.endsWith(packageEntrySuffix)
+    ? directEntry
+    : resolve(dirname(entry), "..", packageEntrySuffix);
   if (existsSync(candidate)) {
     let node = process.execPath;
     try { node = execFileSync("which", ["node"], { encoding: "utf8" }).trim() || node; } catch { /* Bun fallback */ }
