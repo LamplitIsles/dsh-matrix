@@ -230,9 +230,9 @@ cleanup of an uploaded-but-unsent object.
    from the active workspace; verify the `m.image`/`m.file` payload, MIME
    mapping, basename/description body, fixed room, reply anchor, and no event
    for an outside or oversized path.
-7. Stop/reload DSH and confirm the Matrix client, listeners, queued work,
-   scoped tool registrations, and any plugin-resumed Agent stop before a new
-   instance starts.
+7. Stop/reload DSH and confirm the Matrix client, listeners, queued work, and
+   scoped tool registrations stop before a new instance starts. The shared
+   Agent remains under DSH SessionController ownership.
 
 ## Maintainer release setup
 

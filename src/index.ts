@@ -1,7 +1,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import { credentialRef } from "@deepseek-ai/dsh-credentials";
 import { createClient } from "matrix-js-sdk";
-import { MatrixBridge, bridgeRpcHandler } from "./bridge.js";
+import { MatrixBridge, bridgeRpcHandler, type BridgeDependencies } from "./bridge.js";
 import { CREDENTIAL_REF, RPC_CHANNEL, SETTINGS_NAMESPACE } from "./constants.js";
 import { MatrixSettingsSchema } from "./settings.js";
 
@@ -10,8 +10,6 @@ export const inject = [
   "connection",
   "credentials",
   "settings",
-  "agents",
-  "agentPresets",
   "tools",
   "systemPrompt",
   "workspaceRegistry",
@@ -39,13 +37,7 @@ type HostContext = Context & {
   };
   sessionController: {
     inspect: (sessionId: string, signal?: AbortSignal) => Promise<unknown>;
-  };
-  agents: {
-    get: (sessionId: string) => any;
-    resume: (options: { resumeSessionId: string; setup?: (agentContext: unknown) => Promise<void> }) => Promise<any>;
-  };
-  agentPresets?: {
-    mount: (agentContext: unknown, presetId: string) => Promise<unknown>;
+    resolveAgent: BridgeDependencies["resolveAgent"];
   };
 };
 
@@ -67,8 +59,7 @@ export function apply(ctx: HostContext): void {
     resolveCredential: async (ref) => ctx.credentials.resolve(credentialRef(ref)),
     workspaceRegistry: ctx.workspaceRegistry,
     inspectSession: async (sessionId) => await ctx.sessionController.inspect(sessionId) as any,
-    agents: ctx.agents,
-    agentPresets: ctx.agentPresets,
+    resolveAgent: async (sessionId) => await ctx.sessionController.resolveAgent(sessionId),
     matrixClientFactory: (options) => createClient(options) as any,
     onError: (error) => {
       // The SDK/credential error is intentionally not serialized into
@@ -95,7 +86,6 @@ export {
 } from "./bridge.js";
 export type {
   BridgeAgent,
-  BridgeAgentHandle,
   BridgeDependencies,
   BridgeReadiness,
   BridgeReadinessState

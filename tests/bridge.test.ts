@@ -22,7 +22,7 @@ function baseDeps(client: FakeClient, agent?: BridgeAgent): BridgeDependencies {
     resolveCredential: async () => ({ value: "secret-token" }),
     workspaceRegistry: { get: () => ({ id: "workspace", sessionIds: ["session"] }), archivedSessionIds: new Set() },
     inspectSession: async () => ({ meta: { id: "session", agentPreset: "default" }, events: [{ type: "user/message", time: 1, data: { source: { kind: "user" } } }] }),
-    agents: { get: () => agent, resume: async () => ({ agent: agent!, dispose: async () => undefined }) },
+    resolveAgent: async () => agent ? { agent } : { error: new Error("agent unavailable") },
     matrixClientFactory: async () => client
   };
 }
@@ -32,6 +32,38 @@ function matrixEvent(id: string, body: string, sender = "@human:example") {
 }
 
 describe("MatrixBridge", () => {
+  it("resolves the selected conversation once through the shared controller", async () => {
+    const client = new FakeClient();
+    const agent: BridgeAgent = { id: "newer" as never, followup: () => undefined, whenIdle: async () => undefined };
+    const dependencies = baseDeps(client, agent);
+    dependencies.workspaceRegistry = { get: () => ({ id: "workspace", sessionIds: ["older", "newer"] }), archivedSessionIds: new Set() };
+    dependencies.inspectSession = async (sessionId) => ({ meta: { id: sessionId }, events: [{ type: "user/message", time: sessionId === "newer" ? 2 : 1, data: { source: { kind: "user" } } }] });
+    const resolvedSessionIds: string[] = [];
+    dependencies.resolveAgent = async (sessionId) => { resolvedSessionIds.push(sessionId); return { agent }; };
+    const bridge = new MatrixBridge(dependencies);
+
+    await Promise.all([bridge.start(), bridge.start()]);
+
+    expect(resolvedSessionIds).toEqual(["newer"]);
+    expect(bridge.agent).toBe(agent);
+    await bridge.stop();
+  });
+
+  it("does not start Matrix when shared Agent resolution fails", async () => {
+    const client = new FakeClient();
+    const dependencies = baseDeps(client);
+    let matrixStarts = 0;
+    dependencies.matrixClientFactory = async () => { matrixStarts += 1; return client; };
+    const bridge = new MatrixBridge(dependencies);
+
+    await bridge.start();
+
+    expect(bridge.readiness).toMatchObject({ state: "failed", sessionId: "session" });
+    expect(matrixStarts).toBe(0);
+    expect(bridge.matrixClient).toBeUndefined();
+    await bridge.stop();
+  });
+
   it("registers only the active Companion's four fixed-target tools and scoped policy", async () => {
     const client = new FakeClient();
     const registered: ToolDefinition[] = [];
@@ -83,7 +115,9 @@ describe("MatrixBridge", () => {
 
   it("does not emit an automatic unbound-room notice", async () => {
     const client = new FakeClient();
-    const bridge = new MatrixBridge(baseDeps(client));
+    const dependencies = baseDeps(client);
+    dependencies.workspaceRegistry = { get: () => ({ id: "workspace", sessionIds: [] }), archivedSessionIds: new Set() };
+    const bridge = new MatrixBridge(dependencies);
     await bridge.start();
     client.emit("sync", "PREPARED");
     client.emit("Room.timeline", matrixEvent("$trigger", "@bot:example answer"), {}, false, false, { timeline: "live" });
